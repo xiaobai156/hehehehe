@@ -1,0 +1,179 @@
+    1: from __future__ import annotations
+       
+    1: import requests
+    1: import pytest
+       
+    1: from he_app.domain.errors import DedicatedCandidateConflict, SiteScrapeFailure
+    1: from he_app.domain.models import Site
+    1: from he_app.parsers.dedicated.ttss import (
+           TTSS_CHENYUAN_SITE_ID,
+           TTSS_QIFENG_SITE_ID,
+           TTSS_YIKAO_SITE_ID,
+           extract_ttss_kill_sum_period_values,
+           find_ttss_article_link,
+           find_ttss_kill_sum_candidate,
+           find_ttss_next_page_url,
+       )
+    1: from he_app.services import document_sources
+    1: from he_app.services.fingerprint import build_site_fingerprint
+    1: from he_app.services.single_period import parse_site_period
+       
+       
+    1: LIST_URL = "https://a.ttss.vip/list.aspx?id=79&page=1"
+       
+       
+    1: def ttss_site(name: str, site_id: str = TTSS_YIKAO_SITE_ID) -> Site:
+    3:     return Site(name, LIST_URL, "top", False, False, site_id)
+       
+       
+    1: def list_html(*links: tuple[str, str], next_href: str | None = None, page: str = "1/9") -> str:
+   17:     link_html = "".join(f'<li><a href="{href}">{text}</a></li>' for href, text in links)
+    6:     next_html = f'<a href="{next_href}">下一页</a>' if next_href is not None else ""
+    6:     return f"<div class='list'><ul>{link_html}</ul><div class='ui-page'>{next_html}<a>{page}</a></div></div>"
+       
+       
+    1: def article_html(name: str, rows: str, article_period: int = 218) -> str:
+   24:     return f"""
+           <html><body><div class='detail'>
+   12:       <div class='big-tit'>{article_period}期: {name}【绝杀一合】已免费公开</div>
+             <div class='qingchu'>提高速度,减少浏览流量，不保留大量往期记录!</div>
+    6:       {rows}
+             <div class='next-prev'><a>下一篇</a></div>
+           </div></body></html>
+           """
+       
+       
+    1: def test_list_link_requires_exact_period_name_and_keyword() -> None:
+    2:     html = list_html(
+    1:         ("article.aspx?id=1", "217期: 倚靠谁光【绝杀一合】已免费公开"),
+    1:         ("article.aspx?id=2", "218期: 倚靠谁光【绝杀三尾】已免费公开"),
+    1:         ("article.aspx?id=3", "218期: 倚靠谁光【绝杀一合】已免费公开"),
+           )
+       
+    3:     assert find_ttss_article_link(html, LIST_URL, "倚靠谁光", 218) == (
+    2:         "https://a.ttss.vip/article.aspx?id=3"
+           )
+       
+       
+    1: def test_list_pagination_uses_visible_next_link_and_stops_at_last_page() -> None:
+    1:     page_two = "<div class='ui-page'><a href='#'>下一页</a><a>9/9</a></div>"
+       
+    3:     assert find_ttss_next_page_url(list_html(next_href="list.aspx?id=79&page=2"), LIST_URL) == (
+    2:         "https://a.ttss.vip/list.aspx?id=79&page=2"
+           )
+    1:     assert find_ttss_next_page_url(page_two, "https://a.ttss.vip/list.aspx?id=79&page=9") is None
+       
+       
+    1: def test_list_discovery_follows_pages_and_returns_only_same_article(monkeypatch: pytest.MonkeyPatch) -> None:
+    2:     page_one = list_html(
+    1:         ("article.aspx?id=11", "218期: 其他站【绝杀一合】已免费公开"),
+    1:         next_href="list.aspx?id=79&page=2",
+    1:         page="1/9",
+           )
+    1:     page_two_url = "https://a.ttss.vip/list.aspx?id=79&page=2"
+    2:     page_two = list_html(
+    1:         ("article.aspx?id=22", "218期: 倚靠谁光【绝杀一合】已免费公开"),
+    1:         next_href="list.aspx?id=79&page=3",
+    1:         page="2/9",
+           )
+    1:     article_url = "https://a.ttss.vip/article.aspx?id=22"
+    1:     payloads = {
+    1:         LIST_URL: page_one,
+    1:         page_two_url: page_two,
+    2:         article_url: article_html(
+    1:             "倚靠谁光",
+    1:             "<p>218期 倚靠谁光 : 【09合】 开 ?? 准</p><p>217期 倚靠谁光 : 【10合】 开 26 准</p>",
+               ),
+           }
+       
+    4:     monkeypatch.setattr(document_sources, "fetch_text", lambda _session, url, _timeout: payloads[url])
+    2:     documents = document_sources.collect_ttss_list_article_documents(
+    1:         requests.Session(), ttss_site("倚靠谁光"), 5, 218
+           )
+       
+    1:     assert len(documents) == 1
+    1:     assert documents[0].source_url == article_url
+    1:     assert documents[0].record_id == "22"
+    1:     assert page_two_url in documents[0].parent_url
+       
+       
+    1: def test_list_discovery_fails_when_target_is_not_found_before_last_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    1:     payloads = {
+    1:         LIST_URL: list_html(next_href="list.aspx?id=79&page=2", page="1/2"),
+    1:         "https://a.ttss.vip/list.aspx?id=79&page=2": list_html(page="2/2"),
+           }
+    3:     monkeypatch.setattr(document_sources, "fetch_text", lambda _session, url, _timeout: payloads[url])
+       
+    2:     with pytest.raises(SiteScrapeFailure, match="未找到"):
+    2:         document_sources.collect_ttss_list_article_documents(
+    1:             requests.Session(), ttss_site("尘缘难尽", TTSS_CHENYUAN_SITE_ID), 5, 218
+               )
+       
+       
+    1: def test_ttss_top_candidate_and_bulk_history_are_from_detail_block() -> None:
+    2:     document = article_html(
+    1:         "倚靠谁光",
+    1:         """
+               <p>说明文字不占方向窗口</p>
+               <p>218期 倚靠谁光 : 【09合】 开 ?? 准</p>
+               <p>217期 倚靠谁光 : 【10合】 开 26 准</p>
+               <p>216期 倚靠谁光 : 【08合】 开 37 准</p>
+               """,
+           )
+    1:     site = ttss_site("倚靠谁光")
+       
+    1:     candidate = find_ttss_kill_sum_candidate([document], 218, "top")
+    1:     assert candidate is not None
+    1:     assert candidate.values == "09合"
+    2:     assert extract_ttss_kill_sum_period_values([document], "倚靠谁光") == {
+    1:         218: "09合",
+    1:         217: "10合",
+    1:         216: "08合",
+           }
+       
+    1:     parsed = parse_site_period(site, 218, [document])
+    1:     assert parsed.success is True
+    1:     assert parsed.value == "09合 倚靠谁光"
+    1:     assert parsed.evidence[0].keyword == "列表文章绝杀一合"
+       
+    1:     fingerprint = build_site_fingerprint(site, [document], 218, 3)
+    1:     assert fingerprint == {218: "09合", 217: "10合", 216: "08合"}
+       
+       
+    1: def test_ttss_top_rejects_target_period_outside_first_valid_row() -> None:
+    2:     document = article_html(
+    1:         "尘缘难尽",
+    1:         "<p>217期 尘缘难尽 : 【12合】 开 26 准</p><p>218期 尘缘难尽 : 【08合】 开 ?? 准</p>",
+           )
+       
+    6:     assert find_ttss_kill_sum_candidate(
+    4:         [document], 218, "top"
+    2:     ) is None
+       
+       
+    1: def test_ttss_rejects_wrong_article_name_and_multiple_values() -> None:
+    2:     wrong_name = article_html(
+    1:         "棋逢对手",
+    1:         "<p>218期 倚靠谁光 : 【06合】 开 ?? 准</p>",
+           )
+    2:     two_values = article_html(
+    1:         "棋逢对手",
+    1:         "<p>218期 棋逢对手 : 【06合】【07合】 开 ?? 准</p>",
+           )
+       
+    1:     assert find_ttss_kill_sum_candidate([wrong_name], 218, "top") is None
+    1:     assert find_ttss_kill_sum_candidate([two_values], 218, "top") is None
+       
+       
+    1: def test_ttss_same_period_conflict_is_not_silently_resolved() -> None:
+    2:     document = article_html(
+    1:         "棋逢对手",
+    1:         "<p>218期 棋逢对手 : 【06合】 开 ?? 准</p><p>218期 棋逢对手 : 【07合】 开 ?? 准</p>",
+           )
+       
+    2:     with pytest.raises(DedicatedCandidateConflict):
+    1:         find_ttss_kill_sum_candidate([document], 218, "top")
+       
+       
+    1: def test_site_ids_are_distinct_for_three_names() -> None:
+    1:     assert len({TTSS_YIKAO_SITE_ID, TTSS_CHENYUAN_SITE_ID, TTSS_QIFENG_SITE_ID}) == 3

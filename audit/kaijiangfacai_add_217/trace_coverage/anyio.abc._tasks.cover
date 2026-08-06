@@ -1,0 +1,117 @@
+    1: from __future__ import annotations
+       
+    1: import sys
+    1: from abc import ABCMeta, abstractmethod
+    1: from collections.abc import Awaitable, Callable
+    1: from types import TracebackType
+    1: from typing import TYPE_CHECKING, Any, Protocol, overload
+       
+    1: if sys.version_info >= (3, 13):
+>>>>>>     from typing import TypeVar
+       else:
+    1:     from typing_extensions import TypeVar
+       
+    1: if sys.version_info >= (3, 11):
+>>>>>>     from typing import TypeVarTuple, Unpack
+       else:
+    1:     from typing_extensions import TypeVarTuple, Unpack
+       
+    1: if TYPE_CHECKING:
+>>>>>>     from .._core._tasks import CancelScope
+       
+    1: T_Retval = TypeVar("T_Retval")
+    1: T_contra = TypeVar("T_contra", contravariant=True, default=None)
+    1: PosArgsT = TypeVarTuple("PosArgsT")
+       
+       
+    2: class TaskStatus(Protocol[T_contra]):
+    1:     @overload
+    1:     def started(self: TaskStatus[None]) -> None: ...
+       
+    1:     @overload
+    1:     def started(self, value: T_contra) -> None: ...
+       
+    1:     def started(self, value: T_contra | None = None) -> None:
+               """
+               Signal that the task has started.
+       
+               :param value: object passed back to the starter of the task
+               """
+       
+       
+    2: class TaskGroup(metaclass=ABCMeta):
+    1:     """
+           Groups several asynchronous tasks together.
+       
+           :ivar cancel_scope: the cancel scope inherited by all child tasks
+           :vartype cancel_scope: CancelScope
+       
+           .. note:: On asyncio, support for eager task factories is considered to be
+               **experimental**. In particular, they don't follow the usual semantics of new
+               tasks being scheduled on the next iteration of the event loop, and may thus
+               cause unexpected behavior in code that wasn't written with such semantics in
+               mind.
+           """
+       
+    1:     cancel_scope: CancelScope
+       
+    1:     @abstractmethod
+    1:     def start_soon(
+               self,
+               func: Callable[[Unpack[PosArgsT]], Awaitable[Any]],
+               *args: Unpack[PosArgsT],
+    1:         name: object = None,
+           ) -> None:
+               """
+               Start a new task in this task group.
+       
+               :param func: a coroutine function
+               :param args: positional arguments to call the function with
+               :param name: name of the task, for the purposes of introspection and debugging
+       
+               .. versionadded:: 3.0
+               """
+       
+    1:     @abstractmethod
+    1:     async def start(
+               self,
+               func: Callable[..., Awaitable[Any]],
+               *args: object,
+    1:         name: object = None,
+           ) -> Any:
+               """
+               Start a new task and wait until it signals for readiness.
+       
+               The target callable must accept a keyword argument ``task_status`` (of type
+               :class:`TaskStatus`). Awaiting on this method will return whatever was passed to
+               ``task_status.started()`` (``None`` by default).
+       
+               .. note:: The :class:`TaskStatus` class is generic, and the type argument should
+                   indicate the type of the value that will be passed to
+                   ``task_status.started()``.
+       
+               :param func: a coroutine function that accepts the ``task_status`` keyword
+                   argument
+               :param args: positional arguments to call the function with
+               :param name: an optional name for the task, for introspection and debugging
+               :return: the value passed to ``task_status.started()``
+               :raises RuntimeError: if the task finishes without calling
+                   ``task_status.started()``
+       
+               .. seealso:: :ref:`start_initialize`
+       
+               .. versionadded:: 3.0
+               """
+       
+    1:     @abstractmethod
+    1:     async def __aenter__(self) -> TaskGroup:
+               """Enter the task group context and allow starting new tasks."""
+       
+    1:     @abstractmethod
+    1:     async def __aexit__(
+               self,
+               exc_type: type[BaseException] | None,
+               exc_val: BaseException | None,
+               exc_tb: TracebackType | None,
+           ) -> bool:
+               """Exit the task group context waiting for all tasks to finish."""

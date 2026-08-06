@@ -1,0 +1,1035 @@
+    1: """Encoding registry with metadata for all supported encodings."""
+       
+    1: from __future__ import annotations
+       
+    1: import codecs
+    1: import dataclasses
+    1: import functools
+    1: from collections.abc import Iterable
+    1: from types import MappingProxyType
+    1: from typing import Literal
+       
+    1: from chardet.enums import EncodingEra
+       
+    2: EncodingName = Literal[
+    1:     "ascii",
+           "big5hkscs",
+           "cp1006",
+           "cp1026",
+           "cp1125",
+           "cp1140",
+           "cp1250",
+           "cp1251",
+           "cp1252",
+           "cp1253",
+           "cp1254",
+           "cp1255",
+           "cp1256",
+           "cp1257",
+           "cp1258",
+           "cp273",
+           "cp424",
+           "cp437",
+           "cp500",
+           "cp720",
+           "cp737",
+           "cp775",
+           "cp850",
+           "cp852",
+           "cp855",
+           "cp856",
+           "cp857",
+           "cp858",
+           "cp860",
+           "cp861",
+           "cp862",
+           "cp863",
+           "cp864",
+           "cp865",
+           "cp866",
+           "cp869",
+           "cp874",
+           "cp875",
+           "cp932",
+           "cp949",
+           "euc_jis_2004",
+           "euc_kr",
+           "gb18030",
+           "hp-roman8",
+           "hz",
+           "iso2022_jp_2",
+           "iso2022_jp_2004",
+           "iso2022_jp_ext",
+           "iso2022_kr",
+           "iso8859-1",
+           "iso8859-10",
+           "iso8859-13",
+           "iso8859-14",
+           "iso8859-15",
+           "iso8859-16",
+           "iso8859-2",
+           "iso8859-3",
+           "iso8859-4",
+           "iso8859-5",
+           "iso8859-6",
+           "iso8859-7",
+           "iso8859-8",
+           "iso8859-9",
+           "johab",
+           "koi8-r",
+           "koi8-t",
+           "koi8-u",
+           "kz1048",
+           "mac-cyrillic",
+           "mac-greek",
+           "mac-iceland",
+           "mac-latin2",
+           "mac-roman",
+           "mac-turkish",
+           "ptcp154",
+           "shift_jis_2004",
+           "tis-620",
+           "utf-16",
+           "utf-16-be",
+           "utf-16-le",
+           "utf-32",
+           "utf-32-be",
+           "utf-32-le",
+           "utf-7",
+           "utf-8",
+           "utf-8-sig",
+       ]
+       
+       # Shared language tuples — used by multiple EncodingInfo entries below.
+    1: _WESTERN = (
+           "br",
+           "cy",
+           "da",
+           "de",
+           "en",
+           "es",
+           "fi",
+           "fr",
+           "ga",
+           "id",
+           "is",
+           "it",
+           "ms",
+           "nl",
+           "no",
+           "pt",
+           "sv",
+       )
+    1: _WESTERN_TR = (*_WESTERN, "tr")
+    1: _CYRILLIC = ("ru", "bg", "uk", "sr", "mk", "be")
+    1: _CENTRAL_EU = ("pl", "cs", "hu", "hr", "ro", "sk", "sl")
+    1: _CENTRAL_EU_NO_RO = ("pl", "cs", "hu", "hr", "sk", "sl")
+    1: _BALTIC = ("et", "lt", "lv")
+    1: _ARABIC = ("ar", "fa")
+       
+       
+    2: @dataclasses.dataclass(frozen=True, slots=True)
+    1: class EncodingInfo:
+    1:     """Metadata for a single encoding."""
+       
+    1:     name: EncodingName
+    1:     aliases: tuple[str, ...]
+    1:     era: EncodingEra
+    1:     is_multibyte: bool
+    1:     languages: tuple[str, ...]
+       
+       
+    1: @functools.lru_cache(maxsize=256)
+    1: def get_candidates(
+           era: EncodingEra,
+    1:     include_encodings: frozenset[str] | None = None,
+    1:     exclude_encodings: frozenset[str] | None = None,
+       ) -> tuple[EncodingInfo, ...]:
+           """Return registry entries matching the given filters.
+       
+           Filters are applied in order: era, include, exclude.
+       
+           :param era: Bit flags specifying which encoding eras to include.
+           :param include_encodings: If not ``None``, only return encodings in this set.
+           :param exclude_encodings: If not ``None``, exclude encodings in this set.
+           :returns: A tuple of matching :class:`EncodingInfo` entries.
+           """
+>>>>>>     candidates = (enc for enc in REGISTRY.values() if enc.era & era)
+>>>>>>     if include_encodings is not None:
+>>>>>>         candidates = (enc for enc in candidates if enc.name in include_encodings)
+>>>>>>     if exclude_encodings is not None:
+>>>>>>         candidates = (enc for enc in candidates if enc.name not in exclude_encodings)
+>>>>>>     return tuple(candidates)
+       
+       
+       # Era assignments match chardet 6.0.0's chardet/metadata/charsets.py
+       
+   87: _REGISTRY_ENTRIES = (
+           # === MODERN_WEB ===
+    2:     EncodingInfo(
+    1:         name="ascii",
+    1:         aliases=("us-ascii",),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=False,
+    1:         languages=(),
+           ),
+    2:     EncodingInfo(
+    1:         name="utf-8",
+    1:         aliases=(
+                   "utf-8",
+                   "utf8",
+                   "csutf8",
+                   "unicode-1-1-utf-8",
+                   "unicode11utf8",
+                   "unicode20utf8",
+                   "x-unicode20utf8",
+               ),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=False,
+    1:         languages=(),
+           ),
+    2:     EncodingInfo(
+    1:         name="utf-8-sig",
+    1:         aliases=("UTF-8-SIG", "utf-8-bom"),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=False,
+    1:         languages=(),
+           ),
+    2:     EncodingInfo(
+    1:         name="utf-16",
+    1:         aliases=("UTF-16", "utf16", "csutf16"),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=False,
+    1:         languages=(),
+           ),
+    2:     EncodingInfo(
+    1:         name="utf-16-be",
+    1:         aliases=("UTF-16-BE", "utf-16be", "csutf16be"),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=False,
+    1:         languages=(),
+           ),
+    2:     EncodingInfo(
+    1:         name="utf-16-le",
+    1:         aliases=("UTF-16-LE", "utf-16le", "csutf16le"),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=False,
+    1:         languages=(),
+           ),
+    2:     EncodingInfo(
+    1:         name="utf-32",
+    1:         aliases=("UTF-32", "utf32", "csutf32"),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=False,
+    1:         languages=(),
+           ),
+    2:     EncodingInfo(
+    1:         name="utf-32-be",
+    1:         aliases=("UTF-32-BE", "utf-32be", "csutf32be"),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=False,
+    1:         languages=(),
+           ),
+    2:     EncodingInfo(
+    1:         name="utf-32-le",
+    1:         aliases=("UTF-32-LE", "utf-32le", "csutf32le"),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=False,
+    1:         languages=(),
+           ),
+    2:     EncodingInfo(
+    1:         name="utf-7",
+    1:         aliases=("UTF-7", "utf7", "csutf7"),
+    1:         era=EncodingEra.LEGACY_REGIONAL,
+    1:         is_multibyte=False,
+    1:         languages=(),
+           ),
+           # CJK - Modern Web
+    2:     EncodingInfo(
+    1:         name="big5hkscs",
+    1:         aliases=(
+                   "Big5-HKSCS",
+                   "Big5HKSCS",
+                   "big5",
+                   "big5-tw",
+                   "csbig5",
+                   "cp950",
+                   "cn-big5",
+                   "x-x-big5",
+                   "csbig5hkscs",
+               ),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=True,
+    1:         languages=("zh",),
+           ),
+    2:     EncodingInfo(
+    1:         name="cp932",
+    1:         aliases=(
+                   "CP932",
+                   "ms932",
+                   "mskanji",
+                   "ms-kanji",
+                   "cswindows31j",
+                   "windows-31j",
+               ),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=True,
+    1:         languages=("ja",),
+           ),
+    2:     EncodingInfo(
+               # Note: "korean" is NOT an alias here.  Python's codec table
+               # already resolves "korean" to ``euc_kr``, and WHATWG's primary
+               # name for the group is EUC-KR, so letting the default fall
+               # through is more spec-aligned than routing to cp949.
+    1:         name="cp949",
+    1:         aliases=(
+                   "CP949",
+                   "ms949",
+                   "uhc",
+                   "windows-949",
+                   "csksc56011987",
+                   "iso-ir-149",
+                   "ks_c_5601-1987",
+                   "ks_c_5601-1989",
+                   "ksc5601",
+                   "ksc_5601",
+               ),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=True,
+    1:         languages=("ko",),
+           ),
+    2:     EncodingInfo(
+    1:         name="euc_jis_2004",
+    1:         aliases=(
+                   "EUC-JIS-2004",
+                   "euc-jp",
+                   "eucjp",
+                   "ujis",
+                   "u-jis",
+                   "euc-jisx0213",
+                   "cseucpkdfmtjapanese",
+                   "x-euc-jp",
+               ),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=True,
+    1:         languages=("ja",),
+           ),
+    2:     EncodingInfo(
+    1:         name="euc_kr",
+    1:         aliases=("EUC-KR", "euckr", "cseuckr"),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=True,
+    1:         languages=("ko",),
+           ),
+    2:     EncodingInfo(
+               # Note: "chinese" is NOT listed here because the label is
+               # semantically ambiguous between Traditional (Big5) and Simplified
+               # (GB18030) Chinese.  Python's codec table still resolves
+               # "chinese" -> "gb2312" -> (via the gb2312 alias below) gb18030,
+               # so the label continues to work for Simplified content via the
+               # codec fallback in lookup_encoding().  We simply decline to
+               # bless the ambiguity in our own table.
+    1:         name="gb18030",
+    1:         aliases=(
+                   "GB18030",
+                   "gb-18030",
+                   "gb2312",
+                   "gbk",
+                   "csgb2312",
+                   "gb_2312",
+                   "gb_2312-80",
+                   "x-gbk",
+                   "csiso58gb231280",
+                   "iso-ir-58",
+                   "csgb18030",
+                   "csgbk",
+                   "cp936",
+                   "ms936",
+                   "windows-936",
+               ),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=True,
+    1:         languages=("zh",),
+           ),
+    2:     EncodingInfo(
+    1:         name="hz",
+    1:         aliases=("HZ-GB-2312", "hz"),
+    1:         era=EncodingEra.LEGACY_REGIONAL,
+    1:         is_multibyte=True,
+    1:         languages=("zh",),
+           ),
+    2:     EncodingInfo(
+    1:         name="iso2022_jp_2",
+    1:         aliases=(
+                   "ISO-2022-JP-2",
+                   "iso-2022-jp",
+                   "csiso2022jp",
+                   "iso2022-jp-1",
+                   "csiso2022jp2",
+               ),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=True,
+    1:         languages=("ja",),
+           ),
+    2:     EncodingInfo(
+    1:         name="iso2022_jp_2004",
+    1:         aliases=("ISO-2022-JP-2004", "iso2022-jp-3"),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=True,
+    1:         languages=("ja",),
+           ),
+    2:     EncodingInfo(
+    1:         name="iso2022_jp_ext",
+    1:         aliases=("ISO-2022-JP-EXT",),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=True,
+    1:         languages=("ja",),
+           ),
+    2:     EncodingInfo(
+    1:         name="iso2022_kr",
+    1:         aliases=("ISO-2022-KR", "csiso2022kr"),
+    1:         era=EncodingEra.LEGACY_REGIONAL,
+    1:         is_multibyte=True,
+    1:         languages=("ko",),
+           ),
+    2:     EncodingInfo(
+    1:         name="shift_jis_2004",
+    1:         aliases=(
+                   "Shift-JIS-2004",
+                   "Shift_JIS_2004",
+                   "shift_jis",
+                   "sjis",
+                   "shiftjis",
+                   "s_jis",
+                   "shift-jisx0213",
+                   "x-sjis",
+                   "csshiftjis",
+                   "ms_kanji",
+               ),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=True,
+    1:         languages=("ja",),
+           ),
+           # Windows code pages - Modern Web
+    2:     EncodingInfo(
+    1:         name="cp874",
+    1:         aliases=("CP874", "windows-874", "dos-874"),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=False,
+    1:         languages=("th",),
+           ),
+    2:     EncodingInfo(
+    1:         name="cp1250",
+    1:         aliases=("Windows-1250", "cp1250", "x-cp1250", "cswindows1250"),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=False,
+    1:         languages=(*_CENTRAL_EU, "sr"),
+           ),
+    2:     EncodingInfo(
+    1:         name="cp1251",
+    1:         aliases=("Windows-1251", "cp1251", "x-cp1251", "cswindows1251"),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=False,
+    1:         languages=_CYRILLIC,
+           ),
+    2:     EncodingInfo(
+    1:         name="cp1252",
+    1:         aliases=("Windows-1252", "cp1252", "x-cp1252", "cswindows1252"),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=False,
+    1:         languages=_WESTERN,
+           ),
+    2:     EncodingInfo(
+    1:         name="cp1253",
+    1:         aliases=("Windows-1253", "cp1253", "x-cp1253", "cswindows1253"),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=False,
+    1:         languages=("el",),
+           ),
+    2:     EncodingInfo(
+    1:         name="cp1254",
+    1:         aliases=("Windows-1254", "cp1254", "x-cp1254", "cswindows1254"),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=False,
+    1:         languages=("tr",),
+           ),
+    2:     EncodingInfo(
+    1:         name="cp1255",
+    1:         aliases=("Windows-1255", "cp1255", "x-cp1255", "cswindows1255"),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=False,
+    1:         languages=("he",),
+           ),
+    2:     EncodingInfo(
+    1:         name="cp1256",
+    1:         aliases=("Windows-1256", "cp1256", "x-cp1256", "cswindows1256"),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=False,
+    1:         languages=_ARABIC,
+           ),
+    2:     EncodingInfo(
+    1:         name="cp1257",
+    1:         aliases=("Windows-1257", "cp1257", "x-cp1257", "cswindows1257"),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=False,
+    1:         languages=_BALTIC,
+           ),
+    2:     EncodingInfo(
+    1:         name="cp1258",
+    1:         aliases=("Windows-1258", "cp1258", "x-cp1258", "cswindows1258"),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=False,
+    1:         languages=("vi",),
+           ),
+           # KOI8 - Modern Web
+    2:     EncodingInfo(
+    1:         name="koi8-r",
+    1:         aliases=("KOI8-R", "koi8r", "koi", "koi8", "cskoi8r"),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=False,
+    1:         languages=("ru",),
+           ),
+    2:     EncodingInfo(
+    1:         name="koi8-u",
+    1:         aliases=("KOI8-U", "koi8u", "koi8-ru", "cskoi8u"),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=False,
+    1:         languages=("uk",),
+           ),
+           # TIS-620 - Modern Web
+    2:     EncodingInfo(
+    1:         name="tis-620",
+    1:         aliases=(
+                   "TIS-620",
+                   "tis620",
+                   "iso-8859-11",
+                   "iso8859-11",
+                   "iso885911",
+                   "cstis620",
+               ),
+    1:         era=EncodingEra.MODERN_WEB,
+    1:         is_multibyte=False,
+    1:         languages=("th",),
+           ),
+           # === LEGACY_ISO ===
+    2:     EncodingInfo(
+    1:         name="iso8859-1",
+    1:         aliases=("ISO-8859-1", "latin-1", "latin1", "iso8859-1", "iso88591"),
+    1:         era=EncodingEra.LEGACY_ISO,
+    1:         is_multibyte=False,
+    1:         languages=_WESTERN,
+           ),
+    2:     EncodingInfo(
+    1:         name="iso8859-2",
+    1:         aliases=("ISO-8859-2", "latin-2", "latin2", "iso8859-2", "iso88592"),
+    1:         era=EncodingEra.LEGACY_ISO,
+    1:         is_multibyte=False,
+    1:         languages=_CENTRAL_EU,
+           ),
+    2:     EncodingInfo(
+    1:         name="iso8859-3",
+    1:         aliases=("ISO-8859-3", "latin-3", "latin3", "iso8859-3", "iso88593"),
+    1:         era=EncodingEra.LEGACY_ISO,
+    1:         is_multibyte=False,
+    1:         languages=("eo", "mt", "tr"),
+           ),
+    2:     EncodingInfo(
+    1:         name="iso8859-4",
+    1:         aliases=("ISO-8859-4", "latin-4", "latin4", "iso8859-4", "iso88594"),
+    1:         era=EncodingEra.LEGACY_ISO,
+    1:         is_multibyte=False,
+    1:         languages=_BALTIC,
+           ),
+    2:     EncodingInfo(
+    1:         name="iso8859-5",
+    1:         aliases=("ISO-8859-5", "iso8859-5", "cyrillic", "iso88595"),
+    1:         era=EncodingEra.LEGACY_ISO,
+    1:         is_multibyte=False,
+    1:         languages=_CYRILLIC,
+           ),
+    2:     EncodingInfo(
+               # The -E ("explicit directionality") and -I ("implicit
+               # directionality") variants listed by IANA and WHATWG are
+               # higher-level bidi-ordering hints, not separate codecs -- Python
+               # stdlib has no distinct decoder for them, so all four resolve to
+               # the same ``iso8859-6`` canonical here.
+    1:         name="iso8859-6",
+    1:         aliases=(
+                   "ISO-8859-6",
+                   "iso8859-6",
+                   "arabic",
+                   "iso88596",
+                   "iso-8859-6-e",
+                   "iso-8859-6-i",
+                   "csiso88596e",
+                   "csiso88596i",
+               ),
+    1:         era=EncodingEra.LEGACY_ISO,
+    1:         is_multibyte=False,
+    1:         languages=_ARABIC,
+           ),
+    2:     EncodingInfo(
+    1:         name="iso8859-7",
+    1:         aliases=(
+                   "ISO-8859-7",
+                   "iso8859-7",
+                   "greek",
+                   "iso88597",
+                   "sun_eu_greek",
+               ),
+    1:         era=EncodingEra.LEGACY_ISO,
+    1:         is_multibyte=False,
+    1:         languages=("el",),
+           ),
+    2:     EncodingInfo(
+               # WHATWG and IANA distinguish ISO-8859-8 ("visual", -E) from
+               # ISO-8859-8-I ("logical", -I) to signal Hebrew bidi ordering, but
+               # Python's stdlib has a single ``iso8859-8`` codec -- the bidi
+               # distinction is a higher-layer concern.  All variants collapse
+               # onto this one canonical.
+    1:         name="iso8859-8",
+    1:         aliases=(
+                   "ISO-8859-8",
+                   "iso8859-8",
+                   "hebrew",
+                   "iso88598",
+                   "iso-8859-8-e",
+                   "iso-8859-8-i",
+                   "csiso88598e",
+                   "csiso88598i",
+                   "visual",
+                   "logical",
+               ),
+    1:         era=EncodingEra.LEGACY_ISO,
+    1:         is_multibyte=False,
+    1:         languages=("he",),
+           ),
+    2:     EncodingInfo(
+    1:         name="iso8859-9",
+    1:         aliases=("ISO-8859-9", "latin-5", "latin5", "iso8859-9", "iso88599"),
+    1:         era=EncodingEra.LEGACY_ISO,
+    1:         is_multibyte=False,
+    1:         languages=("tr",),
+           ),
+    2:     EncodingInfo(
+    1:         name="iso8859-10",
+    1:         aliases=("ISO-8859-10", "latin-6", "latin6", "iso8859-10", "iso885910"),
+    1:         era=EncodingEra.LEGACY_ISO,
+    1:         is_multibyte=False,
+    1:         languages=("is", "fi"),
+           ),
+    2:     EncodingInfo(
+    1:         name="iso8859-13",
+    1:         aliases=(
+                   "ISO-8859-13",
+                   "latin-7",
+                   "latin7",
+                   "iso8859-13",
+                   "iso885913",
+                   "csiso885913",
+               ),
+    1:         era=EncodingEra.LEGACY_ISO,
+    1:         is_multibyte=False,
+    1:         languages=_BALTIC,
+           ),
+    2:     EncodingInfo(
+               # ``iso-celtic`` is a Python stdlib alias, not a WHATWG/IANA name.
+    1:         name="iso8859-14",
+    1:         aliases=(
+                   "ISO-8859-14",
+                   "latin-8",
+                   "latin8",
+                   "iso8859-14",
+                   "iso885914",
+                   "csiso885914",
+                   "iso-ir-199",
+                   "iso-celtic",
+                   "l8",
+               ),
+    1:         era=EncodingEra.LEGACY_ISO,
+    1:         is_multibyte=False,
+    1:         languages=("cy", "ga", "br", "gd"),
+           ),
+    2:     EncodingInfo(
+    1:         name="iso8859-15",
+    1:         aliases=(
+                   "ISO-8859-15",
+                   "latin-9",
+                   "latin9",
+                   "iso8859-15",
+                   "iso885915",
+                   "csisolatin9",
+                   "csiso885915",
+                   "l9",
+               ),
+    1:         era=EncodingEra.LEGACY_ISO,
+    1:         is_multibyte=False,
+    1:         languages=_WESTERN,
+           ),
+    2:     EncodingInfo(
+    1:         name="iso8859-16",
+    1:         aliases=(
+                   "ISO-8859-16",
+                   "latin-10",
+                   "latin10",
+                   "iso8859-16",
+                   "iso885916",
+                   "csiso885916",
+                   "iso-ir-226",
+                   "l10",
+               ),
+    1:         era=EncodingEra.LEGACY_ISO,
+    1:         is_multibyte=False,
+    1:         languages=("ro", "pl", "hr", "hu", "sk", "sl"),
+           ),
+           # Johab - Legacy ISO per chardet 6.0.0
+    2:     EncodingInfo(
+    1:         name="johab",
+    1:         aliases=("Johab",),
+    1:         era=EncodingEra.LEGACY_ISO,
+    1:         is_multibyte=True,
+    1:         languages=("ko",),
+           ),
+           # === LEGACY_MAC ===
+    2:     EncodingInfo(
+    1:         name="mac-cyrillic",
+    1:         aliases=(
+                   "Mac-Cyrillic",
+                   "MacCyrillic",
+                   "maccyrillic",
+                   "x-mac-cyrillic",
+                   "x-mac-ukrainian",
+               ),
+    1:         era=EncodingEra.LEGACY_MAC,
+    1:         is_multibyte=False,
+    1:         languages=_CYRILLIC,
+           ),
+    2:     EncodingInfo(
+    1:         name="mac-greek",
+    1:         aliases=("Mac-Greek", "MacGreek", "macgreek"),
+    1:         era=EncodingEra.LEGACY_MAC,
+    1:         is_multibyte=False,
+    1:         languages=("el",),
+           ),
+    2:     EncodingInfo(
+    1:         name="mac-iceland",
+    1:         aliases=("Mac-Iceland", "MacIceland", "maciceland"),
+    1:         era=EncodingEra.LEGACY_MAC,
+    1:         is_multibyte=False,
+    1:         languages=("is",),
+           ),
+    2:     EncodingInfo(
+    1:         name="mac-latin2",
+    1:         aliases=("Mac-Latin2", "MacLatin2", "maclatin2", "maccentraleurope"),
+    1:         era=EncodingEra.LEGACY_MAC,
+    1:         is_multibyte=False,
+    1:         languages=_CENTRAL_EU_NO_RO,
+           ),
+    2:     EncodingInfo(
+    1:         name="mac-roman",
+    1:         aliases=(
+                   "Mac-Roman",
+                   "MacRoman",
+                   "macroman",
+                   "macintosh",
+                   "csmacintosh",
+                   "mac",
+                   "x-mac-roman",
+               ),
+    1:         era=EncodingEra.LEGACY_MAC,
+    1:         is_multibyte=False,
+    1:         languages=_WESTERN,
+           ),
+    2:     EncodingInfo(
+    1:         name="mac-turkish",
+    1:         aliases=("Mac-Turkish", "MacTurkish", "macturkish"),
+    1:         era=EncodingEra.LEGACY_MAC,
+    1:         is_multibyte=False,
+    1:         languages=("tr",),
+           ),
+           # === LEGACY_REGIONAL ===
+    2:     EncodingInfo(
+    1:         name="cp720",
+    1:         aliases=("CP720",),
+    1:         era=EncodingEra.LEGACY_REGIONAL,
+    1:         is_multibyte=False,
+    1:         languages=_ARABIC,
+           ),
+    2:     EncodingInfo(
+    1:         name="cp1006",
+    1:         aliases=("CP1006",),
+    1:         era=EncodingEra.LEGACY_REGIONAL,
+    1:         is_multibyte=False,
+    1:         languages=("ur",),
+           ),
+    2:     EncodingInfo(
+    1:         name="cp1125",
+    1:         aliases=("CP1125",),
+    1:         era=EncodingEra.LEGACY_REGIONAL,
+    1:         is_multibyte=False,
+    1:         languages=("uk",),
+           ),
+    2:     EncodingInfo(
+    1:         name="koi8-t",
+    1:         aliases=("KOI8-T",),
+    1:         era=EncodingEra.LEGACY_REGIONAL,
+    1:         is_multibyte=False,
+    1:         languages=("tg",),
+           ),
+    2:     EncodingInfo(
+    1:         name="kz1048",
+    1:         aliases=("KZ-1048", "kz1048", "strk1048-2002", "rk1048"),
+    1:         era=EncodingEra.LEGACY_REGIONAL,
+    1:         is_multibyte=False,
+    1:         languages=("kk",),
+           ),
+    2:     EncodingInfo(
+    1:         name="ptcp154",
+    1:         aliases=("PTCP154", "pt154", "cp154"),
+    1:         era=EncodingEra.LEGACY_REGIONAL,
+    1:         is_multibyte=False,
+    1:         languages=("kk",),
+           ),
+    2:     EncodingInfo(
+    1:         name="hp-roman8",
+    1:         aliases=("HP-Roman8", "roman8", "r8", "csHPRoman8"),
+    1:         era=EncodingEra.LEGACY_REGIONAL,
+    1:         is_multibyte=False,
+    1:         languages=_WESTERN,
+           ),
+           # === DOS ===
+    2:     EncodingInfo(
+    1:         name="cp437",
+    1:         aliases=("CP437",),
+    1:         era=EncodingEra.DOS,
+    1:         is_multibyte=False,
+    1:         languages=("en", "fr", "de", "es", "pt", "it", "nl", "da", "sv", "fi", "ga"),
+           ),
+    2:     EncodingInfo(
+    1:         name="cp737",
+    1:         aliases=("CP737",),
+    1:         era=EncodingEra.DOS,
+    1:         is_multibyte=False,
+    1:         languages=("el",),
+           ),
+    2:     EncodingInfo(
+    1:         name="cp775",
+    1:         aliases=("CP775",),
+    1:         era=EncodingEra.DOS,
+    1:         is_multibyte=False,
+    1:         languages=_BALTIC,
+           ),
+    2:     EncodingInfo(
+    1:         name="cp850",
+    1:         aliases=("CP850",),
+    1:         era=EncodingEra.DOS,
+    1:         is_multibyte=False,
+    1:         languages=_WESTERN,
+           ),
+    2:     EncodingInfo(
+    1:         name="cp852",
+    1:         aliases=("CP852",),
+    1:         era=EncodingEra.DOS,
+    1:         is_multibyte=False,
+    1:         languages=_CENTRAL_EU,
+           ),
+    2:     EncodingInfo(
+    1:         name="cp855",
+    1:         aliases=("CP855",),
+    1:         era=EncodingEra.DOS,
+    1:         is_multibyte=False,
+    1:         languages=_CYRILLIC,
+           ),
+    2:     EncodingInfo(
+    1:         name="cp856",
+    1:         aliases=("CP856",),
+    1:         era=EncodingEra.DOS,
+    1:         is_multibyte=False,
+    1:         languages=("he",),
+           ),
+    2:     EncodingInfo(
+    1:         name="cp857",
+    1:         aliases=("CP857",),
+    1:         era=EncodingEra.DOS,
+    1:         is_multibyte=False,
+    1:         languages=("tr",),
+           ),
+    2:     EncodingInfo(
+    1:         name="cp858",
+    1:         aliases=("CP858",),
+    1:         era=EncodingEra.DOS,
+    1:         is_multibyte=False,
+    1:         languages=_WESTERN,
+           ),
+    2:     EncodingInfo(
+    1:         name="cp860",
+    1:         aliases=("CP860",),
+    1:         era=EncodingEra.DOS,
+    1:         is_multibyte=False,
+    1:         languages=("pt",),
+           ),
+    2:     EncodingInfo(
+    1:         name="cp861",
+    1:         aliases=("CP861",),
+    1:         era=EncodingEra.DOS,
+    1:         is_multibyte=False,
+    1:         languages=("is",),
+           ),
+    2:     EncodingInfo(
+    1:         name="cp862",
+    1:         aliases=("CP862",),
+    1:         era=EncodingEra.DOS,
+    1:         is_multibyte=False,
+    1:         languages=("he",),
+           ),
+    2:     EncodingInfo(
+    1:         name="cp863",
+    1:         aliases=("CP863",),
+    1:         era=EncodingEra.DOS,
+    1:         is_multibyte=False,
+    1:         languages=("fr",),
+           ),
+    2:     EncodingInfo(
+    1:         name="cp864",
+    1:         aliases=("CP864",),
+    1:         era=EncodingEra.DOS,
+    1:         is_multibyte=False,
+    1:         languages=("ar",),
+           ),
+    2:     EncodingInfo(
+    1:         name="cp865",
+    1:         aliases=("CP865",),
+    1:         era=EncodingEra.DOS,
+    1:         is_multibyte=False,
+    1:         languages=("da", "no"),
+           ),
+    2:     EncodingInfo(
+    1:         name="cp866",
+    1:         aliases=("CP866",),
+    1:         era=EncodingEra.DOS,
+    1:         is_multibyte=False,
+    1:         languages=_CYRILLIC,
+           ),
+    2:     EncodingInfo(
+    1:         name="cp869",
+    1:         aliases=("CP869",),
+    1:         era=EncodingEra.DOS,
+    1:         is_multibyte=False,
+    1:         languages=("el",),
+           ),
+           # === MAINFRAME ===
+    2:     EncodingInfo(
+    1:         name="cp1140",
+    1:         aliases=(
+                   "CP1140",
+                   "cp037",
+                   "cp01140",
+                   "ibm01140",
+                   "ibm1140",
+                   "csibm01140",
+               ),
+    1:         era=EncodingEra.MAINFRAME,
+    1:         is_multibyte=False,
+    1:         languages=_WESTERN_TR,
+           ),
+    2:     EncodingInfo(
+    1:         name="cp424",
+    1:         aliases=("CP424",),
+    1:         era=EncodingEra.MAINFRAME,
+    1:         is_multibyte=False,
+    1:         languages=("he",),
+           ),
+    2:     EncodingInfo(
+    1:         name="cp500",
+    1:         aliases=("CP500",),
+    1:         era=EncodingEra.MAINFRAME,
+    1:         is_multibyte=False,
+    1:         languages=_WESTERN,
+           ),
+    2:     EncodingInfo(
+    1:         name="cp875",
+    1:         aliases=("CP875",),
+    1:         era=EncodingEra.MAINFRAME,
+    1:         is_multibyte=False,
+    1:         languages=("el",),
+           ),
+    2:     EncodingInfo(
+    1:         name="cp1026",
+    1:         aliases=("CP1026",),
+    1:         era=EncodingEra.MAINFRAME,
+    1:         is_multibyte=False,
+    1:         languages=("tr",),
+           ),
+    2:     EncodingInfo(
+    1:         name="cp273",
+    1:         aliases=("CP273",),
+    1:         era=EncodingEra.MAINFRAME,
+    1:         is_multibyte=False,
+    1:         languages=("de",),
+           ),
+       )
+       
+    2: REGISTRY: MappingProxyType[str, EncodingInfo] = MappingProxyType(
+   88:     {e.name: e for e in _REGISTRY_ENTRIES}
+       )
+       
+       
+    1: @functools.cache
+    1: def lookup_encoding(name: str) -> EncodingName | None:
+           """Convert an encoding name string to the canonical EncodingName.
+       
+           Handles arbitrary casing, aliases, and Python codec names.
+       
+           :param name: Any encoding name string.
+           :returns: The canonical :data:`EncodingName`, or ``None`` if unknown.
+           """
+   57:     lowered = name.lower()
+ 1261:     for entry in REGISTRY.values():
+ 1261:         if entry.name == lowered:
+   34:             return entry.name
+ 6512:         for alias in entry.aliases:
+ 5308:             if alias.lower() == lowered:
+   23:                 return entry.name
+           # Fallback: resolve through Python's codec registry
+>>>>>>     try:
+>>>>>>         codec_name = codecs.lookup(name).name
+>>>>>>     except (LookupError, ValueError):
+>>>>>>         return None
+>>>>>>     if codec_name != lowered:
+>>>>>>         return lookup_encoding(codec_name)
+>>>>>>     return None
+       
+       
+    1: def _validate_encoding(name: str, param_name: str) -> str:
+           """Validate and normalize a single encoding name.
+       
+           :param name: The encoding name to validate.
+           :param param_name: Parameter name for error messages.
+           :returns: The canonical encoding name.
+           :raises ValueError: If the encoding name is unknown.
+           """
+>>>>>>     canonical = lookup_encoding(name)
+>>>>>>     if canonical is None:
+>>>>>>         msg = f"Unknown encoding {name!r} in {param_name}"
+>>>>>>         raise ValueError(msg)
+>>>>>>     return canonical
+       
+       
+    1: def normalize_encodings(
+           encodings: Iterable[str] | None,
+           param_name: str,
+       ) -> frozenset[str] | None:
+           """Normalize an iterable of encoding names to canonical forms.
+       
+           :param encodings: Encoding names to normalize, or ``None``.
+           :param param_name: Parameter name for error messages.
+           :returns: A frozenset of canonical encoding names, or ``None``.
+           :raises ValueError: If any encoding name is unknown.
+           """
+>>>>>>     if encodings is None:
+>>>>>>         return None
+>>>>>>     result = frozenset(_validate_encoding(name, param_name) for name in encodings)
+>>>>>>     if not result:
+>>>>>>         msg = f"{param_name} must not be empty; omit the argument or pass None to disable filtering"
+>>>>>>         raise ValueError(msg)
+>>>>>>     return result

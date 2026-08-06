@@ -1,0 +1,315 @@
+import base64
+import html
+import json
+import re
+
+# ruff: noqa: F403,F405
+
+from bs4 import BeautifulSoup
+
+from he_app.domain.errors import DedicatedCandidateConflict, SiteScrapeFailure
+from he_app.domain.models import Candidate, Site
+from he_app.domain.policies import normalize_digit_text, normalize_text
+from he_app.parsers.common import *
+from he_app.parsers.policies import PERIOD_RE
+from he_app.validation.record_boundary import find_unique_record, record_id_from_url
+from he_app.validation.direction import directional_window
+
+
+DAJIAFA_SITE_ID = "s129_topic_732154"
+YIAIZHIMING_SITE_ID = "s130_manager_6a1f8c61b67e3ff2e4c4ecbb"
+DAJIAFA_TITLE_RE = re.compile(
+    r"^\s*(\d{1,4})\s*期\s*:\s*\[\s*绝\s*杀\s*一\s*合\s*\]\s*(\S+)\s*$",
+    re.I,
+)
+DAJIAFA_AUTHOR_RE = re.compile(r"作者\s*:\s*(\S+)", re.I)
+DAJIAFA_HISTORY_ROW_RE = re.compile(
+    r"^\s*(\d{1,4})\s*期\s*:\s*绝\s*杀\s*一\s*合\s*"
+    r"\[\s*杀\s*(0?[1-9]|1[0-3])\s*合\s*\]\s*开",
+    re.I,
+)
+
+
+def dajiafa_rows_from_node(node) -> list[Candidate]:
+    rows: list[Candidate] = []
+    for order, line in enumerate(node.get_text("\n", strip=True).splitlines()):
+        normalized = normalize_digit_text(normalize_text(line))
+        match = DAJIAFA_HISTORY_ROW_RE.match(normalized)
+        if match is None:
+            continue
+        value = f"{int(match.group(2)):02d}合"
+        rows.append(Candidate(value, normalized, 120, order))
+    return rows
+
+
+def dajiafa_is_continuation_document(document: str) -> list[Candidate]:
+    soup = BeautifulSoup(document, "html.parser")
+    if soup.select_one(".title, .topic-author, .topic-content") is not None:
+        return []
+
+    lines = [normalize_digit_text(normalize_text(line)) for line in soup.get_text("\n", strip=True).splitlines()]
+    lines = [line for line in lines if line]
+    rows: list[Candidate] = []
+    for order, line in enumerate(lines):
+        match = DAJIAFA_HISTORY_ROW_RE.match(line)
+        if match is None:
+            return []
+        value = f"{int(match.group(2)):02d}合"
+        rows.append(Candidate(value, line, 120, order))
+    return rows
+
+
+def dajiafa_contiguous_cycle(rows: list[Candidate], first_period: int) -> list[Candidate]:
+    cycle: list[Candidate] = []
+    expected = first_period
+    for row in rows:
+        row_period = int(DAJIAFA_HISTORY_ROW_RE.match(row.line).group(1))
+        if row_period != expected:
+            break
+        cycle.append(row)
+        expected -= 1
+    return cycle
+
+
+def dajiafa_history_cycles(documents: list[str]) -> list[list[Candidate]]:
+    cycles: list[list[Candidate]] = []
+    seen: set[tuple[tuple[int, str], ...]] = set()
+    for document_index, document in enumerate(documents):
+        soup = BeautifulSoup(document, "html.parser")
+        tag_order = {id(tag): order for order, tag in enumerate(soup.find_all(True))}
+        for title in soup.select(".title"):
+            title_match = DAJIAFA_TITLE_RE.match(normalize_digit_text(normalize_text(title.get_text(" ", strip=True))))
+            if title_match is None:
+                continue
+
+            next_title = title.find_next(class_="title")
+            author = title.find_next(class_="topic-author")
+            content = author.find_next(class_="topic-content") if author is not None else None
+            author_match = (
+                DAJIAFA_AUTHOR_RE.search(normalize_text(author.get_text(" ", strip=True)))
+                if author is not None
+                else None
+            )
+            if (
+                author is None
+                or content is None
+                or (
+                    next_title is not None
+                    and (
+                        tag_order[id(next_title)] < tag_order[id(author)]
+                        or tag_order[id(next_title)] < tag_order[id(content)]
+                    )
+                )
+                or author_match is None
+                or author_match.group(1).casefold() != title_match.group(2).casefold()
+            ):
+                continue
+
+            first_period = int(title_match.group(1))
+            cycle = dajiafa_contiguous_cycle(dajiafa_rows_from_node(content), first_period)
+            if not cycle:
+                continue
+
+            expected = first_period - len(cycle)
+            for continuation_document in documents[document_index + 1 :]:
+                continuation_rows = dajiafa_is_continuation_document(continuation_document)
+                if not continuation_rows:
+                    break
+                continuation = dajiafa_contiguous_cycle(continuation_rows, expected)
+                if not continuation:
+                    break
+                cycle.extend(continuation)
+                expected -= len(continuation)
+
+            signature = tuple(
+                (int(DAJIAFA_HISTORY_ROW_RE.match(row.line).group(1)), row.values)
+                for row in cycle
+            )
+            if signature and signature not in seen:
+                seen.add(signature)
+                cycles.append(cycle)
+    return cycles
+
+
+def extract_dajiafa_kill_sum_period_values(documents: list[str]) -> dict[int, str]:
+    values: dict[int, str] = {}
+    conflicts: set[int] = set()
+    for cycle in dajiafa_history_cycles(documents):
+        for row in cycle:
+            period = int(DAJIAFA_HISTORY_ROW_RE.match(row.line).group(1))
+            if period in conflicts:
+                continue
+            existing = values.get(period)
+            if existing is None:
+                values[period] = row.values
+            elif existing != row.values:
+                values.pop(period, None)
+                conflicts.add(period)
+    return values
+
+
+def find_dajiafa_kill_sum_candidate(
+    documents: list[str],
+    period: int,
+    pick: str,
+) -> tuple[Candidate | None, bool]:
+    cycles = dajiafa_history_cycles(documents)
+    if not cycles:
+        return None, False
+    selected_cycle = directional_window(cycles, pick, 1)[0]
+    edge = directional_window(selected_cycle, pick, 1)
+    match = next(
+        (
+            row
+            for row in edge
+            if int(DAJIAFA_HISTORY_ROW_RE.match(row.line).group(1)) == period
+        ),
+        None,
+    )
+    outside_direction = any(
+        int(DAJIAFA_HISTORY_ROW_RE.match(row.line).group(1)) == period
+        for cycle in cycles
+        for row in cycle
+    ) and match is None
+    return match, outside_direction
+
+
+def manager_record_id_from_url(url: str) -> str | None:
+    return record_id_from_url(url)
+
+
+def decode_manager_field(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise SiteScrapeFailure("接口字段无效", f"manager文章{field}为空或不是文本")
+    try:
+        decoded = base64.b64decode(value, validate=True).decode("utf-8")
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise SiteScrapeFailure("接口字段无效", f"manager文章{field}不是有效UTF-8 Base64") from exc
+    if not decoded.strip():
+        raise SiteScrapeFailure("接口字段无效", f"manager文章{field}解码后为空")
+    return decoded
+
+
+def find_unique_manager_record(payload: object, record_id: str) -> dict:
+    try:
+        _path, record = find_unique_record(payload, record_id)
+        return record
+    except SiteScrapeFailure as exc:
+        if exc.category == "记录ID缺失":
+            raise SiteScrapeFailure("记录ID缺失", f"manager接口未找到URL记录ID: {record_id}") from exc
+        match = re.search(r"找到(\d+)条", exc.reason)
+        count = match.group(1) if match is not None else "多个"
+        raise SiteScrapeFailure("记录ID冲突", f"manager接口找到{count}个相同记录ID: {record_id}") from exc
+
+
+def yiaizhimin_manager_documents_from_json(api_text: str, site: Site) -> list[str]:
+    record_id = manager_record_id_from_url(site.url)
+    if record_id is None:
+        raise SiteScrapeFailure("记录ID缺失", f"{site.name} URL没有有效manager文章ID")
+    try:
+        payload = json.loads(api_text)
+    except json.JSONDecodeError as exc:
+        raise SiteScrapeFailure("接口响应无效", f"manager文章接口不是有效JSON: {exc}") from exc
+
+    record = find_unique_manager_record(payload, record_id)
+    author = normalize_text(str(record.get("authorNickname", "")))
+    if author != site.name:
+        raise SiteScrapeFailure("记录字段不符", f"URL记录ID对应作者为{author or '空'}，不是{site.name}")
+
+    title_html = decode_manager_field(record.get("title"), "title")
+    body_html = decode_manager_field(record.get("html"), "html")
+    title_text = normalize_text(BeautifulSoup(title_html, "html.parser").get_text(" ", strip=True))
+    if "绝杀一合" not in title_text or PERIOD_RE.search(title_text) is None:
+        raise SiteScrapeFailure("记录字段不符", f"URL记录ID标题未同时包含期数和绝杀一合: {title_text[:120]}")
+
+    sections = record.get("formSections")
+    if not isinstance(sections, list) or not any(
+        isinstance(section, dict) and str(section.get("type", "")).casefold() == "mainarticle"
+        for section in sections
+    ):
+        raise SiteScrapeFailure("记录字段不符", "URL记录ID没有mainarticle栏目")
+
+    document = (
+        f'<article data-manager-record-id="{html.escape(record_id)}" '
+        f'data-manager-author="{html.escape(author)}" data-manager-section="mainarticle">'
+        f'<h1>{title_html}</h1><div data-manager-body="1">{body_html}</div></article>'
+    )
+    return [document]
+
+
+YIAIZHIMING_HISTORY_ROW_RE = re.compile(
+    r"^\s*(\d{1,4})\s*期\s*:\s*\[\s*以爱之名\s*\].{0,12}?"
+    r"绝\s*杀\s*一\s*合.{0,12}?\[\s*(0?[1-9]|1[0-3])\s*\]\s*开\s*:",
+    re.I,
+)
+
+
+def _yiaizhimin_raw_history_rows(documents: list[str]) -> list[Candidate]:
+    rows: list[Candidate] = []
+    order = 0
+    for document in documents:
+        soup = BeautifulSoup(document, "html.parser")
+        article = soup.select_one(
+            'article[data-manager-record-id="6a1f8c61b67e3ff2e4c4ecbb"]'
+            '[data-manager-author="以爱之名"][data-manager-section="mainarticle"]'
+        )
+        body = article.select_one('[data-manager-body="1"]') if article is not None else None
+        if body is None:
+            continue
+        row_html = re.sub(r"<br\s*/?>", "\n", str(body), flags=re.I)
+        row_html = re.sub(r"</(?:p|div|li|tr)\s*>", "\n", row_html, flags=re.I)
+        for line in BeautifulSoup(row_html, "html.parser").get_text("", strip=False).splitlines():
+            normalized = normalize_digit_text(normalize_text(line))
+            match = YIAIZHIMING_HISTORY_ROW_RE.match(normalized)
+            if match is None:
+                continue
+            candidate = Candidate(f"{int(match.group(2)):02d}合", normalized, 120, order)
+            order += 1
+            rows.append(candidate)
+    return rows
+
+
+def yiaizhimin_history_rows(documents: list[str]) -> list[Candidate]:
+    rows_by_period: dict[int, Candidate] = {}
+    conflicts: dict[int, list[Candidate]] = {}
+    for candidate in _yiaizhimin_raw_history_rows(documents):
+        period = int(YIAIZHIMING_HISTORY_ROW_RE.match(candidate.line).group(1))
+        existing = rows_by_period.get(period)
+        if existing is None:
+            rows_by_period[period] = candidate
+        elif existing.values != candidate.values:
+            conflicts.setdefault(period, [existing]).append(candidate)
+
+    if conflicts:
+        candidates = [candidate for group in conflicts.values() for candidate in group]
+        raise DedicatedCandidateConflict(
+            sorted({candidate.values for candidate in candidates}),
+            [candidate.line for candidate in candidates],
+        )
+    return sorted(rows_by_period.values(), key=lambda item: item.order)
+
+
+def extract_yiaizhimin_kill_sum_period_values(documents: list[str]) -> dict[int, str]:
+    return {
+        int(YIAIZHIMING_HISTORY_ROW_RE.match(row.line).group(1)): row.values
+        for row in yiaizhimin_history_rows(documents)
+    }
+
+
+def find_yiaizhimin_kill_sum_candidate(
+    documents: list[str], period: int, pick: str
+) -> tuple[Candidate | None, bool]:
+    rows = _yiaizhimin_raw_history_rows(documents)
+    directional_rows = directional_window(rows, pick, 1)
+    match = next(
+        (row for row in directional_rows if int(YIAIZHIMING_HISTORY_ROW_RE.match(row.line).group(1)) == period),
+        None,
+    )
+    outside_direction = any(
+        int(YIAIZHIMING_HISTORY_ROW_RE.match(row.line).group(1)) == period for row in rows
+    ) and match is None
+    return match, outside_direction
+
+
+
+__all__ = [name for name, value in globals().items() if callable(value) and getattr(value, "__module__", None) == __name__]

@@ -1,0 +1,130 @@
+    1: import pytest
+       
+    1: from he_app.domain.errors import DedicatedCandidateConflict
+    1: from he_app.domain.models import Site
+    1: from he_app.parsers.dedicated.kaijiangfacai import (
+           extract_kaijiangfacai_kill_sum_period_values,
+           find_kaijiangfacai_kill_sum_candidate_with_direction,
+       )
+    1: from he_app.services.fingerprint import build_site_fingerprint
+    1: from he_app.services.single_period import parse_site_period
+       
+       
+    1: SITE_ID = "s131_kjfc_234432"
+       
+       
+    1: def site(pick: str = "bottom") -> Site:
+   18:     return Site(
+    9:         "开奖发财",
+    9:         "https://156.225.88.144:12098/#234432",
+    9:         pick,
+    9:         False,
+    9:         False,
+    9:         SITE_ID,
+           )
+       
+       
+    1: def target_table(rows: list[tuple[str, str, str, str, str, str]]) -> str:
+  146:     body = "".join(
+  440:         "<tr>" + "".join(f"<td>{cell}</td>" for cell in row) + "</tr>"
+   12:         for row in rows
+           )
+   24:     return f"""
+           <div class="list-title">开奖发财【综合杀料】11447.COM</div>
+           <table>
+             <thead><tr><td>期数</td><td>杀尾</td><td>杀肖</td><td>杀合</td><td>杀波</td><td>开奖</td></tr></thead>
+   12:       <tbody>{body}</tbody>
+           </table>
+           """
+       
+       
+    1: def valid_rows() -> list[tuple[str, str, str, str, str, str]]:
+   11:     return [
+               ("215期", "2尾", "龙肖", "08", "红波", "开:蛇14"),
+               ("216期", "1尾", "牛肖", "07", "蓝波", "开:马37"),
+               ("217期", "7尾", "龙肖", "06", "红波", "开:赚99"),
+               ("218期", "?尾", "?", "?", "?", "开:赚99"),
+           ]
+       
+       
+    1: def test_bottom_uses_last_valid_row_and_ignores_invalid_placeholder() -> None:
+    1:     document = target_table(valid_rows())
+       
+    1:     result = parse_site_period(site(), 217, [document])
+       
+    1:     assert result.success and result.value == "06合 开奖发财"
+       
+       
+    1: def test_adjacent_valid_period_is_outside_bottom_direction() -> None:
+    1:     result = parse_site_period(site(), 216, [target_table(valid_rows())])
+       
+    1:     assert not result.success
+    1:     assert result.failure and result.failure.category == "方向范围外"
+       
+       
+    1: def test_nonexistent_period_is_not_reported_as_direction_failure() -> None:
+    1:     result = parse_site_period(site(), 219, [target_table(valid_rows())])
+       
+    1:     assert not result.success
+    1:     assert result.failure and result.failure.category == "无当期"
+       
+       
+    2: @pytest.mark.parametrize(
+    1:     "document",
+    1:     [
+    1:         target_table(valid_rows()).replace("开奖发财【综合杀料】", "开奖发财【四码中特】"),
+    1:         target_table(valid_rows()).replace("<td>杀合</td>", "<td>杀码</td>"),
+    1:         target_table(valid_rows()).replace("<td>06</td>", "<td>14</td>"),
+    1:         target_table(valid_rows()).replace("<td>06</td>", "<td>06 07</td>"),
+           ],
+       )
+    1: def test_wrong_anchor_column_or_value_cannot_succeed(document: str) -> None:
+    4:     result = parse_site_period(site(), 217, [document])
+       
+    4:     assert not result.success
+       
+       
+    1: def test_other_tables_cannot_supply_anchor_or_kill_sum_column() -> None:
+    2:     anchor_only = target_table(valid_rows()).replace("<table>", "<section>").replace(
+    1:         "</table>", "</section>"
+           )
+    2:     data_only = target_table(valid_rows()).replace(
+    1:         '<div class="list-title">开奖发财【综合杀料】11447.COM</div>', ""
+           )
+       
+    1:     result = parse_site_period(site(), 217, [anchor_only, data_only])
+       
+    1:     assert not result.success
+       
+       
+    1: def test_conflicting_authoritative_documents_fail() -> None:
+    1:     first = target_table(valid_rows())
+    1:     second = first.replace("<td>06</td>", "<td>05</td>")
+       
+    2:     with pytest.raises(DedicatedCandidateConflict):
+    1:         extract_kaijiangfacai_kill_sum_period_values([first, second])
+       
+       
+    1: def test_identical_duplicate_documents_are_deduplicated() -> None:
+    1:     document = target_table(valid_rows())
+       
+    2:     candidate, outside = find_kaijiangfacai_kill_sum_candidate_with_direction(
+    1:         [document, document], 217, "bottom"
+           )
+       
+    1:     assert candidate and candidate.values == "06合"
+    1:     assert not outside
+       
+       
+    1: def test_fingerprint_uses_full_target_table_history() -> None:
+   23:     rows = [
+   10:         (f"{period}期", "1尾", "牛肖", f"{(period % 13) + 1:02d}", "蓝波", "开:00")
+    1:         for period in range(208, 218)
+           ]
+    1:     rows.append(("218期", "?尾", "?", "?", "?", "开:赚99"))
+       
+    1:     fingerprint = build_site_fingerprint(site(), [target_table(rows)], 217, 10)
+       
+    1:     assert list(fingerprint) == list(range(217, 207, -1))
+    1:     assert fingerprint[217] == "10合"
+    1:     assert fingerprint[208] == "01合"

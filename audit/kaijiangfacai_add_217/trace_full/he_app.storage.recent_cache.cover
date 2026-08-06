@@ -1,0 +1,174 @@
+    1: import json
+    1: import time
+    1: from pathlib import Path
+       
+    1: from he_app.domain.errors import FingerprintCacheError
+    1: from he_app.domain.models import Site
+    1: from he_app.storage.atomic_write import exclusive_path_lock, write_text_atomic_unlocked
+       
+       
+    1: Outcome = tuple[Site, str | None, str, str | None, list[str], str | None]
+       
+       
+    1: def cache_site_key(site: Site) -> str:
+   13:     return site.site_id or " ".join(site.name.split())
+       
+       
+    1: def load_recent_cache(path: Path) -> dict:
+    5:     if not path.exists():
+    1:         return {"base_period": 0, "periods": 10, "sites": [], "errors": []}
+    4:     try:
+    4:         data = json.loads(path.read_text(encoding="utf-8-sig"))
+    1:     except (OSError, json.JSONDecodeError) as exc:
+    1:         raise FingerprintCacheError(f"指纹缓存无法读取: {path}: {exc}") from exc
+    3:     if not isinstance(data, dict):
+>>>>>>         raise FingerprintCacheError(f"指纹缓存格式错误: {path}")
+    3:     if not isinstance(data.get("base_period", 0), int) or not isinstance(data.get("periods", 10), int):
+>>>>>>         raise FingerprintCacheError(f"指纹缓存基准字段错误: {path}")
+    3:     if not isinstance(data.get("sites", []), list) or not isinstance(data.get("errors", []), list):
+>>>>>>         raise FingerprintCacheError(f"指纹缓存站点字段错误: {path}")
+    3:     data.setdefault("sites", [])
+    3:     data.setdefault("errors", [])
+    3:     return data
+       
+       
+    5: def trim_fingerprint(
+    1:     fingerprint: dict[str, str],
+    1:     periods: int,
+    2:     base_period: int | None = None,
+    1: ) -> dict[str, str]:
+   49:     normalized = {
+    7:         int(raw_period): str(value)
+   14:         for raw_period, value in fingerprint.items()
+   14:         if str(raw_period).isdigit() and value
+           }
+    7:     if base_period is None:
+>>>>>>         selected = sorted(normalized, reverse=True)[:periods]
+           else:
+    7:         minimum = base_period - periods + 1
+   21:         selected = [period for period in sorted(normalized, reverse=True) if minimum <= period <= base_period]
+   21:     return {str(period): normalized[period] for period in selected}
+       
+       
+    8: def _update_recent_cache_locked(
+    1:     path: Path,
+    1:     sites: list[Site],
+    1:     outcomes: dict[int, Outcome],
+    1:     period: int,
+    1:     periods: int,
+    1:     preserve_unconfigured_sites: bool,
+    1: ) -> None:
+    5:     cache = load_recent_cache(path)
+    8:     payload = build_recent_cache_payload(
+    4:         cache, sites, outcomes, period, periods, preserve_unconfigured_sites
+           )
+    4:     write_text_atomic_unlocked(path, payload, "utf-8")
+       
+       
+    8: def build_recent_cache_payload(
+    1:     cache: dict,
+    1:     sites: list[Site],
+    1:     outcomes: dict[int, Outcome],
+    1:     period: int,
+    1:     periods: int,
+    1:     preserve_unconfigured_sites: bool,
+    1: ) -> str:
+    4:     cached_base_period = int(cache.get("base_period", 0) or 0)
+    4:     base_period = max(cached_base_period, period)
+    4:     existing_by_key: dict[str, dict] = {}
+    7:     for item in cache.get("sites", []):
+    3:         if not isinstance(item, dict):
+>>>>>>             continue
+    9:         for key in (str(item.get("id", "")).strip(), str(item.get("url", "")).strip()):
+    6:             if key:
+    6:                 existing_by_key[key] = item
+       
+    4:     next_sites: list[dict] = []
+    4:     next_errors: list[dict] = []
+    4:     now = time.strftime("%Y-%m-%d %H:%M:%S")
+    4:     seen_keys: set[str] = set()
+    8:     for index, site in enumerate(sites):
+    4:         previous = existing_by_key.get(cache_site_key(site)) or existing_by_key.get(site.url) or {}
+    4:         seen_keys.update((cache_site_key(site), site.url))
+    4:         previous_fingerprint = previous.get("fingerprint", {}) if isinstance(previous.get("fingerprint"), dict) else {}
+    8:         fingerprint = trim_fingerprint(
+   12:             {str(key): str(value) for key, value in previous_fingerprint.items()}, periods, base_period
+               )
+    8:         _site, result, detail, error, rank_values, previous_reason = outcomes.get(
+    4:             index, (site, None, "", "未执行", [], None)
+               )
+       
+    4:         period_in_window = base_period - periods < period <= base_period
+    4:         if result and rank_values and period_in_window:
+    3:             fingerprint[str(period)] = ",".join(rank_values)
+    3:             fingerprint = trim_fingerprint(fingerprint, periods, base_period)
+    1:         elif period_in_window:
+    1:             fingerprint.pop(str(period), None)
+    4:         if fingerprint:
+    8:             next_sites.append(
+    4:                 {
+    4:                     "id": cache_site_key(site),
+    4:                     "name": site.name,
+    4:                     "url": site.url,
+    4:                     "pick": site.pick,
+    4:                     "browser": site.browser,
+    4:                     "click_first": site.click_first,
+    4:                     "fingerprint": fingerprint,
+    4:                     "updated_at": now,
+                       }
+                   )
+    4:         if not result or not fingerprint:
+    2:             next_errors.append(
+    1:                 {
+    1:                     "id": cache_site_key(site),
+    1:                     "name": site.name,
+    1:                     "url": site.url,
+    1:                     "error": error or detail or "未抓到可参与重复检测的数据",
+    1:                     "updated_at": now,
+                       }
+                   )
+       
+    4:     if preserve_unconfigured_sites:
+>>>>>>         for item in cache.get("sites", []):
+>>>>>>             if not isinstance(item, dict):
+>>>>>>                 continue
+>>>>>>             item_id = str(item.get("id", "")).strip()
+>>>>>>             item_url = str(item.get("url", "")).strip()
+>>>>>>             if item_id in seen_keys or item_url in seen_keys:
+>>>>>>                 continue
+>>>>>>             fingerprint = item.get("fingerprint", {}) if isinstance(item.get("fingerprint"), dict) else {}
+>>>>>>             trimmed = trim_fingerprint(
+>>>>>>                 {str(key): str(value) for key, value in fingerprint.items()}, periods, base_period
+                   )
+>>>>>>             if trimmed:
+>>>>>>                 kept = dict(item)
+>>>>>>                 kept["fingerprint"] = trimmed
+>>>>>>                 next_sites.append(kept)
+       
+    4:     payload = {
+    4:         "base_period": base_period,
+    4:         "periods": periods,
+    4:         "updated_at": now,
+    4:         "sites": next_sites,
+    4:         "errors": next_errors,
+           }
+    4:     return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+       
+       
+    8: def update_recent_cache_from_outcomes(
+    1:     path: Path,
+    1:     sites: list[Site],
+    1:     outcomes: dict[int, Outcome],
+    1:     period: int,
+    2:     periods: int = 10,
+    2:     preserve_unconfigured_sites: bool = False,
+    1: ) -> None:
+   10:     with exclusive_path_lock(path):
+    5:         _update_recent_cache_locked(path, sites, outcomes, period, periods, preserve_unconfigured_sites)
+       
+       
+       # Compatibility names used by the existing command-line programs during migration.
+    1: load_duplicate_fingerprint_cache = load_recent_cache
+    1: trim_duplicate_fingerprint = trim_fingerprint
+    1: update_duplicate_fingerprint_cache_from_outcomes = update_recent_cache_from_outcomes
+    1: _update_duplicate_fingerprint_cache_from_outcomes_locked = _update_recent_cache_locked

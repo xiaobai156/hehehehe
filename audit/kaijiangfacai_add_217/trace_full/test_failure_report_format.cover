@@ -1,0 +1,106 @@
+    1: from pathlib import Path
+       
+    1: from he_app.domain.models import Site
+    1: from he_app.parsers.common import format_failure_result
+    1: from he_app.services.multi_period import parse_failure_lines
+    1: from he_app.storage.reports import (
+           build_current_only_results,
+           build_failure_stats_lines,
+           build_success_output_lines,
+           format_failure_output,
+       )
+       
+       
+    1: def test_failure_line_uses_requested_single_line_contract() -> None:
+    2:     site = Site(
+    1:         "飞龙在天",
+    1:         "https://anhomo.n03wh-m2skn-wssphn.xyz/",
+    1:         "bottom",
+    1:         site_id="failure-format",
+           )
+       
+    2:     result = format_failure_result(
+    1:         213,
+    1:         site,
+    1:         "飞龙在天 没有找到213期数据",
+    1:         None,
+    1:         "无当期",
+           )
+       
+    2:     assert result == (
+    2:         "失败 飞龙在天 https://anhomo.n03wh-m2skn-wssphn.xyz/ "
+               "方向: bottom 期数: 213 阶段: 指定期数校验 原因: 没有找到213期数据"
+           )
+       
+       
+    1: def test_failure_output_has_one_failure_record_per_line() -> None:
+    1:     lines = [
+    1:         "失败 甲站 https://example.test/a 方向: top 期数: 213 阶段: 指定期数校验 原因: 缺少213期",
+    1:         "失败 乙站 https://example.test/b 方向: bottom 期数: 213 阶段: 数据校验 原因: 合数不完整",
+           ]
+       
+   12:     assert format_failure_output(
+    1:         lines,
+    2:         ["网络失败", "方向失败"],
+           ) == (
+   10:         "\n\n".join(lines)
+    2:         + "\n\n失败分类统计\n"
+    2:         + "方向失败 1条\n"
+    2:         + "网络失败 1条\n"
+           )
+       
+       
+    1: def test_failure_output_counts_every_actual_category_dynamically() -> None:
+    1:     lines = ["失败 甲", "失败 乙", "失败 丙", "失败 丁"]
+       
+    2:     output = format_failure_output(
+    1:         lines,
+    1:         ["网络失败", "网络失败", "专属解析未命中", "未来新增分类"],
+           )
+       
+    3:     assert output.endswith(
+    2:         "失败分类统计\n"
+               "网络失败 2条\n"
+               "专属解析未命中 1条\n"
+               "未来新增分类 1条\n"
+           )
+    1:     assert "方向失败" not in output
+       
+       
+    1: def test_current_results_preserve_explicit_categories_and_classify_errors() -> None:
+    1:     sites = [
+    1:         Site("成功站", "https://example.test/success", "top", site_id="success"),
+    1:         Site("新分类站", "https://example.test/new", "bottom", site_id="new"),
+    1:         Site("超时站", "https://example.test/timeout", "top", site_id="timeout"),
+           ]
+    1:     outcomes = {
+    1:         0: (sites[0], "03合 成功站", "214期 03合", None, ["03合"], None),
+    1:         1: (sites[1], None, "专属解析未命中", None, [], "未来新增分类"),
+    1:         2: (sites[2], None, "", "Timeout: read timed out", [], "不应覆盖错误分类"),
+           }
+       
+    1:     success, failures, ranking_values, categories = build_current_only_results(sites, outcomes, 214)
+       
+    1:     assert success == ["03合 成功站"]
+    1:     assert len(failures) == 2
+    1:     assert ranking_values == ["03合"]
+    1:     assert categories == ["未来新增分类", "请求失败"]
+    1:     assert build_success_output_lines(success, ranking_values)[-1] == "1. 03合 1次"
+       
+       
+    1: def test_empty_failure_output_has_no_summary() -> None:
+    1:     assert build_failure_stats_lines([]) == []
+    1:     assert format_failure_output([], []) == ""
+       
+       
+    1: def test_multi_period_reader_accepts_new_failure_line(tmp_path: Path) -> None:
+    1:     path = tmp_path / "213期-合-失败.txt"
+    2:     path.write_text(
+    1:         "失败 飞龙在天 https://anhomo.n03wh-m2skn-wssphn.xyz/ "
+               "方向: bottom 期数: 213 阶段: 指定期数校验 原因: 没有找到213期数据\n",
+    1:         encoding="utf-8-sig",
+           )
+       
+    1:     failures = parse_failure_lines(path, 213)
+       
+    1:     assert failures["飞龙在天", "https://anhomo.n03wh-m2skn-wssphn.xyz/"].reason == "没有找到213期数据"

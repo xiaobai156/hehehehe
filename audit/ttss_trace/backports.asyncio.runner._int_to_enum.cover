@@ -1,0 +1,20 @@
+    1: """Backported implementation of _int_to_enum from 3.11 compatible down to Python 3.8."""
+       
+    1: import signal
+    1: from enum import IntEnum
+    1: from typing import TypeVar, Union, Type
+       
+    1: _T = TypeVar("_T")
+    1: _E = TypeVar("_E", bound=IntEnum)
+       
+    1: _orig_int_to_enum = signal._int_to_enum  # type: ignore[attr-defined]
+       
+       
+       # See https://github.com/python/cpython/blob/3.11/Lib/signal.py
+    1: def _patched_int_to_enum(value: Union[int, _T], enum_klass: Type[_E]) -> Union[_E, _T]:
+           """Convert a possible numeric value to an IntEnum member.
+           If it's not a known member, return the value itself.
+           """
+>>>>>>     if not isinstance(value, int):
+>>>>>>         return value
+>>>>>>     return _orig_int_to_enum(value, enum_klass)  # type: ignore[no-any-return]

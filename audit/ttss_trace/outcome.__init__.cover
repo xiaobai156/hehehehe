@@ -1,0 +1,20 @@
+    1: """Top-level package for outcome."""
+       
+    1: from ._impl import (
+           Error as Error,
+           Maybe as Maybe,
+           Outcome as Outcome,
+           Value as Value,
+           acapture as acapture,
+           capture as capture,
+       )
+    1: from ._util import AlreadyUsedError as AlreadyUsedError, fixup_module_metadata
+    1: from ._version import __version__ as __version__
+       
+    1: __all__ = (
+           'Error', 'Outcome', 'Value', 'Maybe', 'acapture', 'capture',
+           'AlreadyUsedError'
+       )
+       
+    1: fixup_module_metadata(__name__, globals())
+    1: del fixup_module_metadata

@@ -1,0 +1,21 @@
+    2: class SiteScrapeFailure(Exception):
+    1:     def __init__(self, category: str, reason: str):
+    1:         super().__init__(reason)
+    1:         self.category = category
+    1:         self.reason = reason
+       
+       
+    2: class DedicatedCandidateConflict(Exception):
+    1:     def __init__(self, values: list[str], lines: list[str]):
+    1:         super().__init__("/".join(values))
+    1:         self.values = values
+    1:         self.lines = lines
+       
+       
+    2: class SiteConfigError(RuntimeError):
+    1:     pass
+       
+       
+    2: class FingerprintCacheError(RuntimeError):
+    1:     pass
+       

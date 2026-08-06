@@ -1,0 +1,261 @@
+    1: """Dedicated parser for the a.ttss.vip list-to-article kill-sum sites."""
+       
+    1: from __future__ import annotations
+       
+    1: import re
+    1: from urllib.parse import urldefrag, urljoin, urlparse
+       
+    1: from bs4 import BeautifulSoup
+       
+    1: from he_app.domain.errors import DedicatedCandidateConflict
+    1: from he_app.domain.models import Candidate
+    1: from he_app.domain.policies import normalize_digit_text, normalize_text
+    1: from he_app.parsers.common import score_candidate
+       
+       
+    1: TTSS_YIKAO_SITE_ID = "s132_ttss_79_yikao"
+    1: TTSS_CHENYUAN_SITE_ID = "s133_ttss_79_chenyuan"
+    1: TTSS_QIFENG_SITE_ID = "s134_ttss_79_qifeng"
+    1: TTSS_SITE_IDS = frozenset({TTSS_YIKAO_SITE_ID, TTSS_CHENYUAN_SITE_ID, TTSS_QIFENG_SITE_ID})
+       
+    1: _ANY_SUM_RE = re.compile(r"(?<!\d)(\d{1,2})\s*合")
+    1: _PERIOD_RE = re.compile(r"(?<!\d)(\d{1,4})\s*期")
+       
+       
+    1: def _compact(text: str) -> str:
+   55:     return re.sub(r"\s+", "", normalize_digit_text(normalize_text(text)))
+       
+       
+    1: def _target_title_re(site_name: str) -> re.Pattern[str]:
+   34:     return re.compile(
+   17:         rf"^(?P<period>\d{{1,4}})期:{re.escape(_compact(site_name))}[\[【]绝杀一合[\]】]已免费公开$"
+           )
+       
+       
+    1: def _row_re(site_name: str) -> re.Pattern[str]:
+   46:     return re.compile(
+   23:         rf"(?<!\d)(?P<period>\d{{1,4}})\s*期\s*{re.escape(normalize_text(site_name))}"
+               rf"\s*[:：]\s*[\[【]\s*(?P<value>0?[1-9]|1[0-3])\s*合\s*[\]】]\s*开"
+           )
+       
+       
+    1: def _title_period(title: str, site_name: str) -> int | None:
+   12:     match = _target_title_re(site_name).fullmatch(_compact(title))
+   12:     return int(match.group("period")) if match is not None else None
+       
+       
+    1: def find_ttss_article_link(
+           page_html: str,
+           page_url: str,
+           site_name: str,
+    1:     period: int | None = None,
+       ) -> str | None:
+           """Return the exact same-period list link, never a neighbouring article."""
+       
+    1:     links = find_ttss_article_links(page_html, page_url, site_name, period)
+    1:     return links[0] if links else None
+       
+       
+    1: def find_ttss_article_links(
+           page_html: str,
+           page_url: str,
+           site_name: str,
+    1:     period: int | None = None,
+       ) -> list[str]:
+           """Return every exact target link so the caller can reject duplicate identities."""
+       
+    5:     title_re = _target_title_re(site_name)
+    5:     matches: list[str] = []
+   13:     for link in BeautifulSoup(page_html, "html.parser").find_all("a", href=True):
+    8:         match = title_re.fullmatch(_compact(link.get_text(" ", strip=True)))
+    8:         if match is None:
+    5:             continue
+    3:         if period is not None and int(match.group("period")) != period:
+    1:             continue
+    2:         matches.append(urljoin(page_url, str(link["href"])))
+    5:     return list(dict.fromkeys(matches))
+       
+       
+    1: def find_ttss_next_page_url(page_html: str, page_url: str) -> str | None:
+           """Follow only the same-host visible 下一页 link; a '#' link is terminal."""
+       
+    5:     current_url = urldefrag(page_url)[0]
+    5:     current_host = urlparse(current_url).netloc
+    7:     for link in BeautifulSoup(page_html, "html.parser").find_all("a", href=True):
+    5:         if _compact(link.get_text(" ", strip=True)) != "下一页":
+    1:             continue
+    4:         href = str(link["href"]).strip()
+    4:         if not href or href.startswith("#"):
+    1:             continue
+    3:         next_url = urldefrag(urljoin(page_url, href))[0]
+    3:         if urlparse(next_url).netloc != current_host or next_url == current_url:
+>>>>>>             continue
+    3:         return next_url
+    2:     return None
+       
+       
+    1: def _article_blocks(document: str, site_name: str) -> list[tuple[int, list[tuple[int, Candidate]]]]:
+   11:     soup = BeautifulSoup(document, "html.parser")
+   11:     blocks: list[tuple[int, list[tuple[int, Candidate]]]] = []
+   11:     row_re = _row_re(site_name)
+   22:     for detail in soup.select(".detail"):
+   11:         title = detail.select_one(".big-tit")
+   11:         if title is None:
+>>>>>>             continue
+   11:         article_period = _title_period(title.get_text(" ", strip=True), site_name)
+   11:         if article_period is None:
+>>>>>>             continue
+   11:         rows: list[tuple[int, Candidate]] = []
+   45:         for paragraph in detail.find_all("p"):
+   34:             line = normalize_digit_text(normalize_text(paragraph.get_text(" ", strip=True)))
+   34:             value_tokens = list(_ANY_SUM_RE.finditer(line))
+   34:             if len(value_tokens) != 1:
+    8:                 continue
+   26:             match = row_re.search(line)
+   26:             if match is None:
+    1:                 continue
+   25:             value = int(match.group("value"))
+   25:             if not 1 <= value <= 13:
+>>>>>>                 continue
+   25:             row_period = int(match.group("period"))
+   75:             if [int(item.group(1)) for item in _PERIOD_RE.finditer(line)] != [row_period]:
+>>>>>>                 continue
+   50:             candidate = Candidate(
+   25:                 f"{value:02d}合",
+   25:                 line,
+   25:                 score_candidate(line, [f"{value:02d}合"]),
+   25:                 len(rows),
+                   )
+   25:             rows.append((row_period, candidate))
+   11:         if rows:
+    9:             blocks.append((article_period, rows))
+   11:     return blocks
+       
+       
+    1: def ttss_article_title_period(document: str, site_name: str) -> int | None:
+    1:     for detail in BeautifulSoup(document, "html.parser").select(".detail"):
+    1:         title = detail.select_one(".big-tit")
+    1:         if title is not None:
+    1:             period = _title_period(title.get_text(" ", strip=True), site_name)
+    1:             if period is not None:
+    1:                 return period
+>>>>>>     return None
+       
+       
+    1: def is_ttss_target_title(text: str, site_name: str) -> bool:
+    4:     compact = _compact(text)
+    8:     title_re = re.compile(
+    4:         rf"\d{{1,4}}期:{re.escape(_compact(site_name))}[\[【]绝杀一合[\]】]已免费公开"
+           )
+    4:     return title_re.search(compact) is not None
+       
+       
+    1: def _raise_if_conflicting(rows: list[tuple[int, Candidate]]) -> None:
+    9:     values_by_period: dict[int, str] = {}
+    9:     lines_by_period: dict[int, str] = {}
+   27:     for row_period, candidate in rows:
+   19:         previous = values_by_period.get(row_period)
+   19:         if previous is not None and previous != candidate.values:
+    2:             raise DedicatedCandidateConflict(
+    1:                 [previous, candidate.values],
+    1:                 [lines_by_period[row_period], candidate.line],
+                   )
+   18:         values_by_period[row_period] = candidate.values
+   18:         lines_by_period[row_period] = candidate.line
+       
+       
+    1: def find_ttss_kill_sum_candidate(
+           documents: list[str], period: int, pick: str
+       ) -> Candidate | None:
+    5:     blocks: list[list[tuple[int, Candidate]]] = []
+    5:     all_rows: list[tuple[int, Candidate]] = []
+   10:     for document in documents:
+    8:         for article_period, rows in _article_blocks(document, _site_name_from_document(document)):
+    3:             if article_period == period:
+    3:                 blocks.append(rows)
+    3:             all_rows.extend(rows)
+       
+    5:     _raise_if_conflicting(all_rows)
+    4:     if not blocks:
+    2:         return None
+    2:     selected = blocks[0] if pick in {"top", "顶部", "上", "前"} else blocks[-1]
+    2:     edge = selected[0] if pick in {"top", "顶部", "上", "前"} else selected[-1]
+    2:     return edge[1] if edge[0] == period else None
+       
+       
+    1: def _site_name_from_document(document: str) -> str:
+           """Extract the title's name for internal parsing when the caller has one document."""
+       
+    5:     soup = BeautifulSoup(document, "html.parser")
+    5:     title = soup.select_one(".detail .big-tit")
+    5:     if title is None:
+>>>>>>         return ""
+    5:     compact = _compact(title.get_text(" ", strip=True))
+    5:     match = re.fullmatch(r"\d{1,4}期:(.+)[\[【]绝杀一合[\]】]已免费公开", compact)
+    5:     return match.group(1) if match is not None else ""
+       
+       
+    1: def find_ttss_kill_sum_candidate_for_site(
+           documents: list[str], period: int, pick: str, site_name: str
+       ) -> Candidate | None:
+           """Site-name-bound variant used by the registry; it cannot borrow another title."""
+       
+    1:     blocks: list[list[tuple[int, Candidate]]] = []
+    1:     all_rows: list[tuple[int, Candidate]] = []
+    2:     for document in documents:
+    2:         for article_period, rows in _article_blocks(document, site_name):
+    1:             if article_period == period:
+    1:                 blocks.append(rows)
+    1:             all_rows.extend(rows)
+       
+    1:     _raise_if_conflicting(all_rows)
+    1:     if not blocks:
+>>>>>>         return None
+    1:     is_top = pick in {"top", "顶部", "上", "前"}
+    1:     selected = blocks[0] if is_top else blocks[-1]
+    1:     edge = selected[0] if is_top else selected[-1]
+    1:     return edge[1] if edge[0] == period else None
+       
+       
+    1: def is_ttss_kill_sum_row(text: str, site_name: str, period: int, value: str) -> bool:
+   12:     normalized = normalize_digit_text(normalize_text(text))
+   12:     tokens = list(_ANY_SUM_RE.finditer(normalized))
+   12:     match = _row_re(site_name).search(normalized)
+   12:     return (
+   28:         len(tokens) == 1
+    8:         and match is not None
+    8:         and int(match.group("period")) == period
+    8:         and f"{int(match.group('value')):02d}合" == value
+           )
+       
+       
+    1: def find_ttss_history_candidate(
+           documents: list[str], period: int, site_name: str
+       ) -> Candidate | None:
+    3:     rows: list[tuple[int, Candidate]] = []
+    6:     for document in documents:
+    6:         for _article_period, article_rows in _article_blocks(document, site_name):
+    3:             rows.extend(article_rows)
+    3:     _raise_if_conflicting(rows)
+   15:     matches = [candidate for row_period, candidate in rows if row_period == period]
+    3:     if not matches:
+>>>>>>         return None
+    3:     first = matches[0]
+    9:     return first if all(candidate.values == first.values for candidate in matches) else None
+       
+       
+    1: def extract_ttss_kill_sum_period_values(documents: list[str], site_name: str) -> dict[int, str]:
+    2:     values: dict[int, str] = {}
+    2:     all_lines: dict[int, str] = {}
+    4:     for document in documents:
+    4:         for _article_period, rows in _article_blocks(document, site_name):
+    8:             for row_period, candidate in rows:
+    6:                 previous = values.get(row_period)
+    6:                 if previous is not None and previous != candidate.values:
+>>>>>>                     raise DedicatedCandidateConflict(
+>>>>>>                         [previous, candidate.values],
+>>>>>>                         [all_lines[row_period], candidate.line],
+                           )
+    6:                 values[row_period] = candidate.values
+    6:                 all_lines[row_period] = candidate.line
+    2:     return values

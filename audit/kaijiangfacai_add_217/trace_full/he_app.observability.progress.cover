@@ -1,0 +1,48 @@
+    1: def format_progress_prefix(index: int, total: int) -> str:
+    4:     return f"[{index + 1}/{total}]"
+       
+       
+    8: def format_completion_progress(
+    1:     completed: int,
+    1:     total: int,
+    1:     success_count: int,
+    1:     fail_count: int,
+    1:     site_name: str,
+    1:     elapsed_seconds: float,
+    1: ) -> str:
+    2:     percent = int((completed / total) * 100) if total else 100
+    2:     return (
+    8:         f"[进度 {completed}/{total} {percent}% 成功 {success_count} "
+    6:         f"失败 {fail_count} 用时 {elapsed_seconds:.1f}s] 当前: {site_name}"
+           )
+       
+       
+    4: def build_slow_site_lines(
+    1:     timings: list[tuple[str, float, bool]],
+    2:     limit: int = 10,
+    1: ) -> list[str]:
+    2:     if not timings:
+>>>>>>         return []
+       
+    2:     lines = ["", f"慢站耗时TOP{min(limit, len(timings))}"]
+    6:     for rank, (name, elapsed_seconds, success) in enumerate(
+    4:         sorted(timings, key=lambda item: item[1], reverse=True)[:limit],
+    2:         start=1,
+           ):
+    2:         status = "成功" if success else "失败"
+    2:         lines.append(f"{rank}. {name} {elapsed_seconds:.1f}s {status}")
+    2:     return lines
+       
+       
+    1: def build_all_site_timing_lines(timings: list[tuple[str, float, bool]]) -> list[str]:
+>>>>>>     if not timings:
+>>>>>>         return []
+       
+>>>>>>     lines = ["", "所有目录耗时统计"]
+>>>>>>     for rank, (name, elapsed_seconds, success) in enumerate(
+>>>>>>         sorted(timings, key=lambda item: item[1], reverse=True),
+>>>>>>         start=1,
+           ):
+>>>>>>         status = "成功" if success else "失败"
+>>>>>>         lines.append(f"{rank}. {name} {elapsed_seconds:.1f}s {status}")
+>>>>>>     return lines

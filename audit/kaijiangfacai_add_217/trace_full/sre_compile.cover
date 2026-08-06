@@ -1,0 +1,808 @@
+       #
+       # Secret Labs' Regular Expression Engine
+       #
+       # convert template to internal format
+       #
+       # Copyright (c) 1997-2001 by Secret Labs AB.  All rights reserved.
+       #
+       # See the sre.py file for information on usage and redistribution.
+       #
+       
+>>>>>> """Internal support module for sre"""
+       
+>>>>>> import _sre
+>>>>>> import sre_parse
+>>>>>> from sre_constants import *
+       
+>>>>>> assert _sre.MAGIC == MAGIC, "SRE module mismatch"
+       
+>>>>>> _LITERAL_CODES = {LITERAL, NOT_LITERAL}
+>>>>>> _REPEATING_CODES = {REPEAT, MIN_REPEAT, MAX_REPEAT}
+>>>>>> _SUCCESS_CODES = {SUCCESS, FAILURE}
+>>>>>> _ASSERT_CODES = {ASSERT, ASSERT_NOT}
+>>>>>> _UNIT_CODES = _LITERAL_CODES | {ANY, IN}
+       
+       # Sets of lowercase characters which have the same uppercase.
+>>>>>> _equivalences = (
+           # LATIN SMALL LETTER I, LATIN SMALL LETTER DOTLESS I
+           (0x69, 0x131), # iı
+           # LATIN SMALL LETTER S, LATIN SMALL LETTER LONG S
+           (0x73, 0x17f), # sſ
+           # MICRO SIGN, GREEK SMALL LETTER MU
+           (0xb5, 0x3bc), # µμ
+           # COMBINING GREEK YPOGEGRAMMENI, GREEK SMALL LETTER IOTA, GREEK PROSGEGRAMMENI
+           (0x345, 0x3b9, 0x1fbe), # \u0345ιι
+           # GREEK SMALL LETTER IOTA WITH DIALYTIKA AND TONOS, GREEK SMALL LETTER IOTA WITH DIALYTIKA AND OXIA
+           (0x390, 0x1fd3), # ΐΐ
+           # GREEK SMALL LETTER UPSILON WITH DIALYTIKA AND TONOS, GREEK SMALL LETTER UPSILON WITH DIALYTIKA AND OXIA
+           (0x3b0, 0x1fe3), # ΰΰ
+           # GREEK SMALL LETTER BETA, GREEK BETA SYMBOL
+           (0x3b2, 0x3d0), # βϐ
+           # GREEK SMALL LETTER EPSILON, GREEK LUNATE EPSILON SYMBOL
+           (0x3b5, 0x3f5), # εϵ
+           # GREEK SMALL LETTER THETA, GREEK THETA SYMBOL
+           (0x3b8, 0x3d1), # θϑ
+           # GREEK SMALL LETTER KAPPA, GREEK KAPPA SYMBOL
+           (0x3ba, 0x3f0), # κϰ
+           # GREEK SMALL LETTER PI, GREEK PI SYMBOL
+           (0x3c0, 0x3d6), # πϖ
+           # GREEK SMALL LETTER RHO, GREEK RHO SYMBOL
+           (0x3c1, 0x3f1), # ρϱ
+           # GREEK SMALL LETTER FINAL SIGMA, GREEK SMALL LETTER SIGMA
+           (0x3c2, 0x3c3), # ςσ
+           # GREEK SMALL LETTER PHI, GREEK PHI SYMBOL
+           (0x3c6, 0x3d5), # φϕ
+           # CYRILLIC SMALL LETTER VE, CYRILLIC SMALL LETTER ROUNDED VE
+           (0x432, 0x1c80), # вᲀ
+           # CYRILLIC SMALL LETTER DE, CYRILLIC SMALL LETTER LONG-LEGGED DE
+           (0x434, 0x1c81), # дᲁ
+           # CYRILLIC SMALL LETTER O, CYRILLIC SMALL LETTER NARROW O
+           (0x43e, 0x1c82), # оᲂ
+           # CYRILLIC SMALL LETTER ES, CYRILLIC SMALL LETTER WIDE ES
+           (0x441, 0x1c83), # сᲃ
+           # CYRILLIC SMALL LETTER TE, CYRILLIC SMALL LETTER TALL TE, CYRILLIC SMALL LETTER THREE-LEGGED TE
+           (0x442, 0x1c84, 0x1c85), # тᲄᲅ
+           # CYRILLIC SMALL LETTER HARD SIGN, CYRILLIC SMALL LETTER TALL HARD SIGN
+           (0x44a, 0x1c86), # ъᲆ
+           # CYRILLIC SMALL LETTER YAT, CYRILLIC SMALL LETTER TALL YAT
+           (0x463, 0x1c87), # ѣᲇ
+           # CYRILLIC SMALL LETTER UNBLENDED UK, CYRILLIC SMALL LETTER MONOGRAPH UK
+           (0x1c88, 0xa64b), # ᲈꙋ
+           # LATIN SMALL LETTER S WITH DOT ABOVE, LATIN SMALL LETTER LONG S WITH DOT ABOVE
+           (0x1e61, 0x1e9b), # ṡẛ
+           # LATIN SMALL LIGATURE LONG S T, LATIN SMALL LIGATURE ST
+           (0xfb05, 0xfb06), # ﬅﬆ
+       )
+       
+       # Maps the lowercase code to lowercase codes which have the same uppercase.
+>>>>>> _ignorecase_fixes = {i: tuple(j for j in t if i != j)
+>>>>>>                      for t in _equivalences for i in t}
+       
+>>>>>> def _combine_flags(flags, add_flags, del_flags,
+>>>>>>                    TYPE_FLAGS=sre_parse.TYPE_FLAGS):
+  301:     if add_flags & TYPE_FLAGS:
+>>>>>>         flags &= ~TYPE_FLAGS
+  301:     return (flags | add_flags) & ~del_flags
+       
+>>>>>> def _compile(code, pattern, flags):
+           # internal: compile a (sub)pattern
+ 6523:     emit = code.append
+ 6523:     _len = len
+ 6523:     LITERAL_CODES = _LITERAL_CODES
+ 6523:     REPEATING_CODES = _REPEATING_CODES
+ 6523:     SUCCESS_CODES = _SUCCESS_CODES
+ 6523:     ASSERT_CODES = _ASSERT_CODES
+ 6523:     iscased = None
+ 6523:     tolower = None
+ 6523:     fixes = None
+ 6523:     if flags & SRE_FLAG_IGNORECASE and not flags & SRE_FLAG_LOCALE:
+ 1492:         if flags & SRE_FLAG_UNICODE:
+ 1445:             iscased = _sre.unicode_iscased
+ 1445:             tolower = _sre.unicode_tolower
+ 1445:             fixes = _ignorecase_fixes
+               else:
+   47:             iscased = _sre.ascii_iscased
+   47:             tolower = _sre.ascii_tolower
+17058:     for op, av in pattern:
+10535:         if op in LITERAL_CODES:
+ 6084:             if not flags & SRE_FLAG_IGNORECASE:
+ 4811:                 emit(op)
+ 4811:                 emit(av)
+ 1273:             elif flags & SRE_FLAG_LOCALE:
+>>>>>>                 emit(OP_LOCALE_IGNORE[op])
+>>>>>>                 emit(av)
+ 1273:             elif not iscased(av):
+  880:                 emit(op)
+  880:                 emit(av)
+                   else:
+  393:                 lo = tolower(av)
+  393:                 if not fixes:  # ascii
+   84:                     emit(OP_IGNORE[op])
+   84:                     emit(lo)
+  309:                 elif lo not in fixes:
+  275:                     emit(OP_UNICODE_IGNORE[op])
+  275:                     emit(lo)
+                       else:
+   34:                     emit(IN_UNI_IGNORE)
+   34:                     skip = _len(code); emit(0)
+   34:                     if op is NOT_LITERAL:
+>>>>>>                         emit(NEGATE)
+  102:                     for k in (lo,) + fixes[lo]:
+   68:                         emit(LITERAL)
+   68:                         emit(k)
+   34:                     emit(FAILURE)
+   34:                     code[skip] = _len(code) - skip
+ 4451:         elif op is IN:
+ 1553:             charset, hascased = _optimize_charset(av, iscased, tolower, fixes)
+ 1553:             if flags & SRE_FLAG_IGNORECASE and flags & SRE_FLAG_LOCALE:
+>>>>>>                 emit(IN_LOC_IGNORE)
+ 1553:             elif not hascased:
+ 1504:                 emit(IN)
+   49:             elif not fixes:  # ascii
+    1:                 emit(IN_IGNORE)
+                   else:
+   48:                 emit(IN_UNI_IGNORE)
+ 1553:             skip = _len(code); emit(0)
+ 1553:             _compile_charset(charset, flags, code)
+ 1553:             code[skip] = _len(code) - skip
+ 2898:         elif op is ANY:
+   40:             if flags & SRE_FLAG_DOTALL:
+    8:                 emit(ANY_ALL)
+                   else:
+   32:                 emit(ANY)
+ 2858:         elif op in REPEATING_CODES:
+ 1619:             if flags & SRE_FLAG_TEMPLATE:
+>>>>>>                 raise error("internal: unsupported template operator %r" % (op,))
+ 1619:             if _simple(av[2]):
+ 1288:                 if op is MAX_REPEAT:
+ 1232:                     emit(REPEAT_ONE)
+                       else:
+   56:                     emit(MIN_REPEAT_ONE)
+ 1288:                 skip = _len(code); emit(0)
+ 1288:                 emit(av[0])
+ 1288:                 emit(av[1])
+ 1288:                 _compile(code, av[2], flags)
+ 1288:                 emit(SUCCESS)
+ 1288:                 code[skip] = _len(code) - skip
+                   else:
+  331:                 emit(REPEAT)
+  331:                 skip = _len(code); emit(0)
+  331:                 emit(av[0])
+  331:                 emit(av[1])
+  331:                 _compile(code, av[2], flags)
+  331:                 code[skip] = _len(code) - skip
+  331:                 if op is MAX_REPEAT:
+  322:                     emit(MAX_UNTIL)
+                       else:
+    9:                     emit(MIN_UNTIL)
+ 1239:         elif op is SUBPATTERN:
+  230:             group, add_flags, del_flags, p = av
+  230:             if group:
+  216:                 emit(MARK)
+  216:                 emit((group-1)*2)
+                   # _compile_info(code, p, _combine_flags(flags, add_flags, del_flags))
+  230:             _compile(code, p, _combine_flags(flags, add_flags, del_flags))
+  230:             if group:
+  216:                 emit(MARK)
+  216:                 emit((group-1)*2+1)
+ 1009:         elif op in SUCCESS_CODES:
+>>>>>>             emit(op)
+ 1009:         elif op in ASSERT_CODES:
+  290:             emit(op)
+  290:             skip = _len(code); emit(0)
+  290:             if av[0] >= 0:
+  237:                 emit(0) # look ahead
+                   else:
+   53:                 lo, hi = av[1].getwidth()
+   53:                 if lo != hi:
+>>>>>>                     raise error("look-behind requires fixed-width pattern")
+   53:                 emit(lo) # look behind
+  290:             _compile(code, av[1], flags)
+  290:             emit(SUCCESS)
+  290:             code[skip] = _len(code) - skip
+  719:         elif op is CALL:
+>>>>>>             emit(op)
+>>>>>>             skip = _len(code); emit(0)
+>>>>>>             _compile(code, av, flags)
+>>>>>>             emit(SUCCESS)
+>>>>>>             code[skip] = _len(code) - skip
+  719:         elif op is AT:
+  244:             emit(op)
+  244:             if flags & SRE_FLAG_MULTILINE:
+    2:                 av = AT_MULTILINE.get(av, av)
+  244:             if flags & SRE_FLAG_LOCALE:
+>>>>>>                 av = AT_LOCALE.get(av, av)
+  244:             elif flags & SRE_FLAG_UNICODE:
+  222:                 av = AT_UNICODE.get(av, av)
+  244:             emit(av)
+  475:         elif op is BRANCH:
+  474:             emit(op)
+  474:             tail = []
+  474:             tailappend = tail.append
+ 4543:             for av in av[1]:
+ 4069:                 skip = _len(code); emit(0)
+                       # _compile_info(code, av, flags)
+ 4069:                 _compile(code, av, flags)
+ 4069:                 emit(JUMP)
+ 4069:                 tailappend(_len(code)); emit(0)
+ 4069:                 code[skip] = _len(code) - skip
+  474:             emit(FAILURE) # end of branch
+ 4543:             for tail in tail:
+ 4069:                 code[tail] = _len(code) - tail
+    1:         elif op is CATEGORY:
+>>>>>>             emit(op)
+>>>>>>             if flags & SRE_FLAG_LOCALE:
+>>>>>>                 av = CH_LOCALE[av]
+>>>>>>             elif flags & SRE_FLAG_UNICODE:
+>>>>>>                 av = CH_UNICODE[av]
+>>>>>>             emit(av)
+    1:         elif op is GROUPREF:
+    1:             if not flags & SRE_FLAG_IGNORECASE:
+>>>>>>                 emit(op)
+    1:             elif flags & SRE_FLAG_LOCALE:
+>>>>>>                 emit(GROUPREF_LOC_IGNORE)
+    1:             elif not fixes:  # ascii
+>>>>>>                 emit(GROUPREF_IGNORE)
+                   else:
+    1:                 emit(GROUPREF_UNI_IGNORE)
+    1:             emit(av-1)
+>>>>>>         elif op is GROUPREF_EXISTS:
+>>>>>>             emit(op)
+>>>>>>             emit(av[0]-1)
+>>>>>>             skipyes = _len(code); emit(0)
+>>>>>>             _compile(code, av[1], flags)
+>>>>>>             if av[2]:
+>>>>>>                 emit(JUMP)
+>>>>>>                 skipno = _len(code); emit(0)
+>>>>>>                 code[skipyes] = _len(code) - skipyes + 1
+>>>>>>                 _compile(code, av[2], flags)
+>>>>>>                 code[skipno] = _len(code) - skipno
+                   else:
+>>>>>>                 code[skipyes] = _len(code) - skipyes + 1
+               else:
+>>>>>>             raise error("internal: unsupported operand type %r" % (op,))
+       
+>>>>>> def _compile_charset(charset, flags, code):
+           # compile charset subprogram
+ 1587:     emit = code.append
+ 4134:     for op, av in charset:
+ 2547:         emit(op)
+ 2547:         if op is NEGATE:
+  176:             pass
+ 2371:         elif op is LITERAL:
+  990:             emit(av)
+ 1381:         elif op is RANGE or op is RANGE_UNI_IGNORE:
+  388:             emit(av[0])
+  388:             emit(av[1])
+  993:         elif op is CHARSET:
+  251:             code.extend(av)
+  742:         elif op is BIGCHARSET:
+   76:             code.extend(av)
+  666:         elif op is CATEGORY:
+  666:             if flags & SRE_FLAG_LOCALE:
+>>>>>>                 emit(CH_LOCALE[av])
+  666:             elif flags & SRE_FLAG_UNICODE:
+  572:                 emit(CH_UNICODE[av])
+                   else:
+   94:                 emit(av)
+               else:
+>>>>>>             raise error("internal: unsupported set operator %r" % (op,))
+ 1587:     emit(FAILURE)
+       
+>>>>>> def _optimize_charset(charset, iscased=None, fixup=None, fixes=None):
+           # internal: optimize character set
+ 1587:     out = []
+ 1587:     tail = []
+ 1587:     charmap = bytearray(256)
+ 1587:     hascased = False
+ 8368:     for op, av in charset:
+ 6953:         while True:
+ 6953:             try:
+ 6953:                 if op is LITERAL:
+ 5201:                     if fixup:
+  858:                         lo = fixup(av)
+  858:                         charmap[lo] = 1
+  833:                         if fixes and lo in fixes:
+    5:                             for k in fixes[lo]:
+    3:                                 charmap[k] = 1
+  832:                         if not hascased and iscased(av):
+    1:                             hascased = True
+                           else:
+ 4343:                         charmap[av] = 1
+ 1752:                 elif op is RANGE:
+  910:                     r = range(av[0], av[1]+1)
+  910:                     if fixup:
+  266:                         if fixes:
+ 4962:                             for i in map(fixup, r):
+ 4705:                                 charmap[i] = 1
+ 4705:                                 if i in fixes:
+   44:                                     for k in fixes[i]:
+   26:                                         charmap[k] = 1
+                               else:
+   27:                             for i in map(fixup, r):
+   26:                                 charmap[i] = 1
+  258:                         if not hascased:
+  217:                             hascased = any(map(iscased, r))
+                           else:
+28023:                         for i in r:
+27382:                             charmap[i] = 1
+  842:                 elif op is NEGATE:
+  176:                     out.append((op, av))
+                       else:
+  666:                     tail.append((op, av))
+  438:             except IndexError:
+  438:                 if len(charmap) == 256:
+                           # character set contains non-UCS1 character codes
+  172:                     charmap += b'\0' * 0xff00
+  172:                     continue
+                       # Character set contains non-BMP character codes.
+                       # For range, all BMP characters in the range are already
+                       # proceeded.
+  266:                 if fixup:
+>>>>>>                     hascased = True
+                           # For now, IN_UNI_IGNORE+LITERAL and
+                           # IN_UNI_IGNORE+RANGE_UNI_IGNORE work for all non-BMP
+                           # characters, because two characters (at least one of
+                           # which is not in the BMP) match case-insensitively
+                           # if and only if:
+                           # 1) c1.lower() == c2.lower()
+                           # 2) c1.lower() == c2 or c1.lower().upper() == c2
+                           # Also, both c.lower() and c.lower().upper() are single
+                           # characters for every non-BMP character.
+>>>>>>                     if op is RANGE:
+>>>>>>                         op = RANGE_UNI_IGNORE
+  266:                 tail.append((op, av))
+ 6781:             break
+       
+           # compress character map
+ 1587:     runs = []
+ 1587:     q = 0
+ 3353:     while True:
+ 3353:         p = charmap.find(1, q)
+ 3353:         if p < 0:
+ 1260:             break
+ 2093:         if len(runs) >= 2:
+  327:             runs = None
+  327:             break
+ 1766:         q = charmap.find(0, p)
+ 1766:         if q < 0:
+>>>>>>             runs.append((p, len(charmap)))
+>>>>>>             break
+ 1766:         runs.append((p, q))
+ 1587:     if runs is not None:
+               # use literal/range
+ 2372:         for p, q in runs:
+ 1112:             if q - p == 1:
+  724:                 out.append((LITERAL, p))
+                   else:
+  388:                 out.append((RANGE, (p, q - 1)))
+ 1260:         out += tail
+               # if the case was changed or new representation is more compact
+ 1260:         if hascased or len(out) < len(charset):
+  183:             return out, hascased
+               # else original character set is good enough
+ 1077:         return charset, hascased
+       
+           # use bitmap
+  327:     if len(charmap) == 256:
+  251:         data = _mk_bitmap(charmap)
+  251:         out.append((CHARSET, data))
+  251:         out += tail
+  251:         return out, hascased
+       
+           # To represent a big charset, first a bitmap of all characters in the
+           # set is constructed. Then, this bitmap is sliced into chunks of 256
+           # characters, duplicate chunks are eliminated, and each chunk is
+           # given a number. In the compiled expression, the charset is
+           # represented by a 32-bit word sequence, consisting of one word for
+           # the number of different chunks, a sequence of 256 bytes (64 words)
+           # of chunk numbers indexed by their original chunk position, and a
+           # sequence of 256-bit chunks (8 words each).
+       
+           # Compression is normally good: in a typical charset, large ranges of
+           # Unicode will be either completely excluded (e.g. if only cyrillic
+           # letters are to be matched), or completely included (e.g. if large
+           # subranges of Kanji match). These ranges will be represented by
+           # chunks of all one-bits or all zero-bits.
+       
+           # Matching can be also done efficiently: the more significant byte of
+           # the Unicode character is an index into the chunk number, and the
+           # less significant byte is a bit index in the chunk (just like the
+           # CHARSET matching).
+       
+   76:     charmap = bytes(charmap) # should be hashable
+   76:     comps = {}
+   76:     mapping = bytearray(256)
+   76:     block = 0
+   76:     data = bytearray()
+19532:     for i in range(0, 65536, 256):
+19456:         chunk = charmap[i: i + 256]
+19456:         if chunk in comps:
+19121:             mapping[i // 256] = comps[chunk]
+               else:
+  335:             mapping[i // 256] = comps[chunk] = block
+  335:             block += 1
+  335:             data += chunk
+   76:     data = _mk_bitmap(data)
+   76:     data[0:0] = [block] + _bytes_to_codes(mapping)
+   76:     out.append((BIGCHARSET, data))
+   76:     out += tail
+   76:     return out, hascased
+       
+>>>>>> _CODEBITS = _sre.CODESIZE * 8
+>>>>>> MAXCODE = (1 << _CODEBITS) - 1
+>>>>>> _BITS_TRANS = b'0' + b'1' * 255
+>>>>>> def _mk_bitmap(bits, _CODEBITS=_CODEBITS, _int=int):
+  327:     s = bits.translate(_BITS_TRANS)[::-1]
+ 5669:     return [_int(s[i - _CODEBITS: i], 2)
+  327:             for i in range(len(s), 0, -_CODEBITS)]
+       
+>>>>>> def _bytes_to_codes(b):
+           # Convert block indices to word array
+   76:     a = memoryview(b).cast('I')
+   76:     assert a.itemsize == _sre.CODESIZE
+   76:     assert len(a) * a.itemsize == len(b)
+   76:     return a.tolist()
+       
+>>>>>> def _simple(p):
+           # check if this subpattern is a "simple" operator
+ 1619:     if len(p) != 1:
+  179:         return False
+ 1440:     op, av = p[0]
+ 1440:     if op is SUBPATTERN:
+   12:         return av[0] is None and _simple(av[-1])
+ 1428:     return op in _UNIT_CODES
+       
+>>>>>> def _generate_overlap_table(prefix):
+           """
+           Generate an overlap table for the following prefix.
+           An overlap table is a table of the same size as the prefix which
+           informs about the potential self-overlap for each index in the prefix:
+           - if overlap[i] == 0, prefix[i:] can't overlap prefix[0:...]
+           - if overlap[i] == k with 0 < k <= i, prefix[i-k+1:i+1] overlaps with
+             prefix[0:k]
+           """
+   79:     table = [0] * len(prefix)
+  183:     for i in range(1, len(prefix)):
+  104:         idx = table[i - 1]
+  106:         while prefix[i] != prefix[idx]:
+   99:             if idx == 0:
+   97:                 table[i] = 0
+   97:                 break
+    2:             idx = table[idx - 1]
+               else:
+    7:             table[i] = idx + 1
+   79:     return table
+       
+>>>>>> def _get_iscased(flags):
+  568:     if not flags & SRE_FLAG_IGNORECASE:
+  432:         return None
+  136:     elif flags & SRE_FLAG_UNICODE:
+  127:         return _sre.unicode_iscased
+           else:
+    9:         return _sre.ascii_iscased
+       
+>>>>>> def _get_literal_prefix(pattern, flags):
+           # look for literal prefix
+  348:     prefix = []
+  348:     prefixappend = prefix.append
+  348:     prefix_skip = None
+  348:     iscased = _get_iscased(flags)
+  538:     for op, av in pattern.data:
+  518:         if op is LITERAL:
+  194:             if iscased and iscased(av):
+   11:                 break
+  183:             prefixappend(av)
+  324:         elif op is SUBPATTERN:
+   49:             group, add_flags, del_flags, p = av
+   49:             flags1 = _combine_flags(flags, add_flags, del_flags)
+   49:             if flags1 & SRE_FLAG_IGNORECASE and flags1 & SRE_FLAG_LOCALE:
+>>>>>>                 break
+   49:             prefix1, prefix_skip1, got_all = _get_literal_prefix(p, flags1)
+   49:             if prefix_skip is None:
+   49:                 if group is not None:
+   35:                     prefix_skip = len(prefix)
+   14:                 elif prefix_skip1 is not None:
+>>>>>>                     prefix_skip = len(prefix) + prefix_skip1
+   49:             prefix.extend(prefix1)
+   49:             if not got_all:
+   42:                 break
+               else:
+  275:             break
+           else:
+   20:         return prefix, prefix_skip, True
+  328:     return prefix, prefix_skip, False
+       
+>>>>>> def _get_charset_prefix(pattern, flags):
+  242:     while True:
+  242:         if not pattern.data:
+>>>>>>             return None
+  242:         op, av = pattern.data[0]
+  242:         if op is not SUBPATTERN:
+  220:             break
+   22:         group, add_flags, del_flags, pattern = av
+   22:         flags = _combine_flags(flags, add_flags, del_flags)
+   22:         if flags & SRE_FLAG_IGNORECASE and flags & SRE_FLAG_LOCALE:
+>>>>>>             return None
+       
+  220:     iscased = _get_iscased(flags)
+  220:     if op is LITERAL:
+    5:         if iscased and iscased(av):
+    5:             return None
+>>>>>>         return [(op, av)]
+  215:     elif op is BRANCH:
+   41:         charset = []
+   41:         charsetappend = charset.append
+ 3082:         for p in av[1]:
+ 3067:             if not p:
+>>>>>>                 return None
+ 3067:             op, av = p[0]
+ 3067:             if op is LITERAL and not (iscased and iscased(av)):
+ 3041:                 charsetappend((op, av))
+                   else:
+   26:                 return None
+   15:         return charset
+  174:     elif op is IN:
+   23:         charset = av
+   23:         if iscased:
+    7:             for op, av in charset:
+    7:                 if op is LITERAL:
+    3:                     if iscased(av):
+>>>>>>                         return None
+    4:                 elif op is RANGE:
+    4:                     if av[1] > 0xffff:
+>>>>>>                         return None
+    4:                     if any(map(iscased, range(av[0], av[1]+1))):
+    4:                         return None
+   19:         return charset
+  151:     return None
+       
+>>>>>> def _compile_info(code, pattern, flags):
+           # internal: compile an info block.  in the current version,
+           # this contains min/max pattern width, and an optional literal
+           # prefix or a character map
+  315:     lo, hi = pattern.getwidth()
+  315:     if hi > MAXCODE:
+>>>>>>         hi = MAXCODE
+  315:     if lo == 0:
+   16:         code.extend([INFO, 4, 0, lo, hi])
+   16:         return
+           # look for a literal prefix
+  299:     prefix = []
+  299:     prefix_skip = 0
+  299:     charset = [] # not used
+  299:     if not (flags & SRE_FLAG_IGNORECASE and flags & SRE_FLAG_LOCALE):
+               # look for literal prefix
+  299:         prefix, prefix_skip, got_all = _get_literal_prefix(pattern, flags)
+               # if no prefix, look for charset prefix
+  299:         if not prefix:
+  220:             charset = _get_charset_prefix(pattern, flags)
+       ##     if prefix:
+       ##         print("*** PREFIX", prefix, prefix_skip)
+       ##     if charset:
+       ##         print("*** CHARSET", charset)
+           # add an info block
+  299:     emit = code.append
+  299:     emit(INFO)
+  299:     skip = len(code); emit(0)
+           # literal flag
+  299:     mask = 0
+  299:     if prefix:
+   79:         mask = SRE_INFO_PREFIX
+   79:         if prefix_skip is None and got_all:
+   13:             mask = mask | SRE_INFO_LITERAL
+  220:     elif charset:
+   34:         mask = mask | SRE_INFO_CHARSET
+  299:     emit(mask)
+           # pattern length
+  299:     if lo < MAXCODE:
+  299:         emit(lo)
+           else:
+>>>>>>         emit(MAXCODE)
+>>>>>>         prefix = prefix[:MAXCODE]
+  299:     emit(min(hi, MAXCODE))
+           # add literal prefix
+  299:     if prefix:
+   79:         emit(len(prefix)) # length
+   79:         if prefix_skip is None:
+   64:             prefix_skip =  len(prefix)
+   79:         emit(prefix_skip) # skip
+   79:         code.extend(prefix)
+               # generate overlap table
+   79:         code.extend(_generate_overlap_table(prefix))
+  220:     elif charset:
+   34:         charset, hascased = _optimize_charset(charset)
+   34:         assert not hascased
+   34:         _compile_charset(charset, flags, code)
+  299:     code[skip] = len(code) - skip
+       
+>>>>>> def isstring(obj):
+  630:     return isinstance(obj, (str, bytes))
+       
+>>>>>> def _code(p, flags):
+       
+  315:     flags = p.state.flags | flags
+  315:     code = []
+       
+           # compile info block
+  315:     _compile_info(code, p, flags)
+       
+           # compile the pattern
+  315:     _compile(code, p.data, flags)
+       
+  315:     code.append(SUCCESS)
+       
+  315:     return code
+       
+>>>>>> def _hex_code(code):
+>>>>>>     return '[%s]' % ', '.join('%#0*x' % (_sre.CODESIZE*2+2, x) for x in code)
+       
+>>>>>> def dis(code):
+>>>>>>     import sys
+       
+>>>>>>     labels = set()
+>>>>>>     level = 0
+>>>>>>     offset_width = len(str(len(code) - 1))
+       
+>>>>>>     def dis_(start, end):
+>>>>>>         def print_(*args, to=None):
+>>>>>>             if to is not None:
+>>>>>>                 labels.add(to)
+>>>>>>                 args += ('(to %d)' % (to,),)
+>>>>>>             print('%*d%s ' % (offset_width, start, ':' if start in labels else '.'),
+>>>>>>                   end='  '*(level-1))
+>>>>>>             print(*args)
+       
+>>>>>>         def print_2(*args):
+>>>>>>             print(end=' '*(offset_width + 2*level))
+>>>>>>             print(*args)
+       
+               nonlocal level
+>>>>>>         level += 1
+>>>>>>         i = start
+>>>>>>         while i < end:
+>>>>>>             start = i
+>>>>>>             op = code[i]
+>>>>>>             i += 1
+>>>>>>             op = OPCODES[op]
+>>>>>>             if op in (SUCCESS, FAILURE, ANY, ANY_ALL,
+>>>>>>                       MAX_UNTIL, MIN_UNTIL, NEGATE):
+>>>>>>                 print_(op)
+>>>>>>             elif op in (LITERAL, NOT_LITERAL,
+>>>>>>                         LITERAL_IGNORE, NOT_LITERAL_IGNORE,
+>>>>>>                         LITERAL_UNI_IGNORE, NOT_LITERAL_UNI_IGNORE,
+>>>>>>                         LITERAL_LOC_IGNORE, NOT_LITERAL_LOC_IGNORE):
+>>>>>>                 arg = code[i]
+>>>>>>                 i += 1
+>>>>>>                 print_(op, '%#02x (%r)' % (arg, chr(arg)))
+>>>>>>             elif op is AT:
+>>>>>>                 arg = code[i]
+>>>>>>                 i += 1
+>>>>>>                 arg = str(ATCODES[arg])
+>>>>>>                 assert arg[:3] == 'AT_'
+>>>>>>                 print_(op, arg[3:])
+>>>>>>             elif op is CATEGORY:
+>>>>>>                 arg = code[i]
+>>>>>>                 i += 1
+>>>>>>                 arg = str(CHCODES[arg])
+>>>>>>                 assert arg[:9] == 'CATEGORY_'
+>>>>>>                 print_(op, arg[9:])
+>>>>>>             elif op in (IN, IN_IGNORE, IN_UNI_IGNORE, IN_LOC_IGNORE):
+>>>>>>                 skip = code[i]
+>>>>>>                 print_(op, skip, to=i+skip)
+>>>>>>                 dis_(i+1, i+skip)
+>>>>>>                 i += skip
+>>>>>>             elif op in (RANGE, RANGE_UNI_IGNORE):
+>>>>>>                 lo, hi = code[i: i+2]
+>>>>>>                 i += 2
+>>>>>>                 print_(op, '%#02x %#02x (%r-%r)' % (lo, hi, chr(lo), chr(hi)))
+>>>>>>             elif op is CHARSET:
+>>>>>>                 print_(op, _hex_code(code[i: i + 256//_CODEBITS]))
+>>>>>>                 i += 256//_CODEBITS
+>>>>>>             elif op is BIGCHARSET:
+>>>>>>                 arg = code[i]
+>>>>>>                 i += 1
+>>>>>>                 mapping = list(b''.join(x.to_bytes(_sre.CODESIZE, sys.byteorder)
+>>>>>>                                         for x in code[i: i + 256//_sre.CODESIZE]))
+>>>>>>                 print_(op, arg, mapping)
+>>>>>>                 i += 256//_sre.CODESIZE
+>>>>>>                 level += 1
+>>>>>>                 for j in range(arg):
+>>>>>>                     print_2(_hex_code(code[i: i + 256//_CODEBITS]))
+>>>>>>                     i += 256//_CODEBITS
+>>>>>>                 level -= 1
+>>>>>>             elif op in (MARK, GROUPREF, GROUPREF_IGNORE, GROUPREF_UNI_IGNORE,
+>>>>>>                         GROUPREF_LOC_IGNORE):
+>>>>>>                 arg = code[i]
+>>>>>>                 i += 1
+>>>>>>                 print_(op, arg)
+>>>>>>             elif op is JUMP:
+>>>>>>                 skip = code[i]
+>>>>>>                 print_(op, skip, to=i+skip)
+>>>>>>                 i += 1
+>>>>>>             elif op is BRANCH:
+>>>>>>                 skip = code[i]
+>>>>>>                 print_(op, skip, to=i+skip)
+>>>>>>                 while skip:
+>>>>>>                     dis_(i+1, i+skip)
+>>>>>>                     i += skip
+>>>>>>                     start = i
+>>>>>>                     skip = code[i]
+>>>>>>                     if skip:
+>>>>>>                         print_('branch', skip, to=i+skip)
+                           else:
+>>>>>>                         print_(FAILURE)
+>>>>>>                 i += 1
+>>>>>>             elif op in (REPEAT, REPEAT_ONE, MIN_REPEAT_ONE):
+>>>>>>                 skip, min, max = code[i: i+3]
+>>>>>>                 if max == MAXREPEAT:
+>>>>>>                     max = 'MAXREPEAT'
+>>>>>>                 print_(op, skip, min, max, to=i+skip)
+>>>>>>                 dis_(i+3, i+skip)
+>>>>>>                 i += skip
+>>>>>>             elif op is GROUPREF_EXISTS:
+>>>>>>                 arg, skip = code[i: i+2]
+>>>>>>                 print_(op, arg, skip, to=i+skip)
+>>>>>>                 i += 2
+>>>>>>             elif op in (ASSERT, ASSERT_NOT):
+>>>>>>                 skip, arg = code[i: i+2]
+>>>>>>                 print_(op, skip, arg, to=i+skip)
+>>>>>>                 dis_(i+2, i+skip)
+>>>>>>                 i += skip
+>>>>>>             elif op is INFO:
+>>>>>>                 skip, flags, min, max = code[i: i+4]
+>>>>>>                 if max == MAXREPEAT:
+>>>>>>                     max = 'MAXREPEAT'
+>>>>>>                 print_(op, skip, bin(flags), min, max, to=i+skip)
+>>>>>>                 start = i+4
+>>>>>>                 if flags & SRE_INFO_PREFIX:
+>>>>>>                     prefix_len, prefix_skip = code[i+4: i+6]
+>>>>>>                     print_2('  prefix_skip', prefix_skip)
+>>>>>>                     start = i + 6
+>>>>>>                     prefix = code[start: start+prefix_len]
+>>>>>>                     print_2('  prefix',
+>>>>>>                             '[%s]' % ', '.join('%#02x' % x for x in prefix),
+>>>>>>                             '(%r)' % ''.join(map(chr, prefix)))
+>>>>>>                     start += prefix_len
+>>>>>>                     print_2('  overlap', code[start: start+prefix_len])
+>>>>>>                     start += prefix_len
+>>>>>>                 if flags & SRE_INFO_CHARSET:
+>>>>>>                     level += 1
+>>>>>>                     print_2('in')
+>>>>>>                     dis_(start, i+skip)
+>>>>>>                     level -= 1
+>>>>>>                 i += skip
+                   else:
+>>>>>>                 raise ValueError(op)
+       
+>>>>>>         level -= 1
+       
+>>>>>>     dis_(0, len(code))
+       
+       
+>>>>>> def compile(p, flags=0):
+           # internal: convert pattern list to internal format
+       
+  315:     if isstring(p):
+  315:         pattern = p
+  315:         p = sre_parse.parse(p, flags)
+           else:
+>>>>>>         pattern = None
+       
+  315:     code = _code(p, flags)
+       
+  315:     if flags & SRE_FLAG_DEBUG:
+>>>>>>         print()
+>>>>>>         dis(code)
+       
+           # map in either direction
+  315:     groupindex = p.state.groupdict
+  315:     indexgroup = [None] * p.state.groups
+  376:     for k, i in groupindex.items():
+   61:         indexgroup[i] = k
+       
+  630:     return _sre.compile(
+  315:         pattern, flags | p.state.flags, code,
+  315:         p.state.groups-1,
+  315:         groupindex, tuple(indexgroup)
+               )

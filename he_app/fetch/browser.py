@@ -1,0 +1,341 @@
+import time
+from pathlib import Path
+from queue import Full, Queue
+from threading import Lock
+
+from he_app.domain.models import Site, SourceDocument
+
+
+def advance_wait_state(
+    current_state: tuple[int, int],
+    previous_state: tuple[int, int] | None,
+    last_state: tuple[int, int] | None,
+    stable_count: int,
+) -> tuple[int, bool]:
+    body_len, page_len = current_state
+    if body_len < 20 and page_len < 200:
+        return 0, False
+    if previous_state is not None and current_state == previous_state:
+        return 0, False
+    next_count = stable_count + 1 if current_state == last_state else 1
+    return next_count, next_count >= 2
+
+
+class BrowserClient:
+    def __init__(self, headless: bool = True):
+        self.headless = headless
+        self.driver = None
+        self.capture_sequence = 0
+
+    def start(self) -> None:
+        if self.driver is not None:
+            return
+        from selenium import webdriver
+        from selenium.webdriver.chrome.options import Options
+        from selenium.webdriver.chrome.service import Service
+
+        options = Options()
+        options.page_load_strategy = "eager"
+        if self.headless:
+            options.add_argument("--headless=new")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--ignore-certificate-errors")
+        options.add_argument("--window-size=1600,2400")
+        chrome_binary = self.find_browser_binary()
+        if chrome_binary:
+            options.binary_location = chrome_binary
+        try:
+            from webdriver_manager.chrome import ChromeDriverManager
+
+            self.driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+        except Exception:
+            self.driver = webdriver.Chrome(options=options)
+
+    @staticmethod
+    def find_browser_binary() -> str | None:
+        candidates = [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        ]
+        return next((candidate for candidate in candidates if Path(candidate).exists()), None)
+
+    def close(self) -> None:
+        if self.driver is not None:
+            self.driver.quit()
+            self.driver = None
+
+    def clear_site_state(self) -> None:
+        if self.driver is None:
+            return
+        self.driver.delete_all_cookies()
+        self.driver.execute_script("window.localStorage.clear(); window.sessionStorage.clear();")
+        self.driver.get("about:blank")
+
+    def get_document_state(self) -> tuple[int, int]:
+        body_text = ""
+        page_source = ""
+        if self.driver is not None:
+            try:
+                body_text = self.driver.find_element("tag name", "body").text or ""
+            except Exception:
+                pass
+            try:
+                page_source = self.driver.page_source or ""
+            except Exception:
+                pass
+        return len(body_text.strip()), len(page_source)
+
+    def wait_for_document(self, max_wait: float, previous_state: tuple[int, int] | None = None) -> None:
+        deadline = time.time() + max(0.0, max_wait)
+        last_state = None
+        stable_count = 0
+        while True:
+            state = self.get_document_state()
+            stable_count, ready = advance_wait_state(state, previous_state, last_state, stable_count)
+            if ready or time.time() >= deadline:
+                return
+            last_state = state
+            time.sleep(0.25)
+
+    def get_documents(self, url: str, period: int, click_first: bool, timeout: int) -> list[str]:
+        if self.driver is None:
+            raise RuntimeError("Browser is not started")
+        self.driver.set_page_load_timeout(timeout)
+        try:
+            self.driver.get(url)
+        except Exception as exc:
+            if "timeout" not in str(exc).lower():
+                raise
+        self.wait_for_document(min(float(timeout), 5.0))
+        self.capture_sequence = 0
+        documents = self.collect_documents(url)
+        if click_first:
+            previous_state = self.get_document_state()
+            if self.try_click_labels():
+                self.wait_for_document(min(float(timeout), 2.0), previous_state)
+                documents.extend(self.collect_documents(url))
+            for _ in range(2):
+                previous_state = self.get_document_state()
+                if self.try_click_best_post(period):
+                    self.wait_for_document(min(float(timeout), 3.0), previous_state)
+                    documents.extend(self.collect_documents(url))
+        return documents
+
+    def collect_documents(self, url: str = "") -> list[str]:
+        if self.driver is None:
+            return []
+        try:
+            body_text = self.driver.find_element("tag name", "body").text
+        except Exception:
+            body_text = ""
+        state_id = f"browser:{url}:state:{self.capture_sequence}"
+        self.capture_sequence += 1
+        return [
+            SourceDocument(
+                body_text,
+                source_url=url,
+                fetch_kind="browser",
+                document_type="body-text",
+                parent_url=url,
+                authority_id=f"{state_id}:body",
+                document_id=f"{state_id}:body",
+            ),
+            SourceDocument(
+                self.driver.page_source,
+                source_url=url,
+                fetch_kind="browser",
+                document_type="page-source",
+                parent_url=url,
+                authority_id=f"{state_id}:page-source",
+                document_id=f"{state_id}:page-source",
+            ),
+        ]
+
+    def try_click_labels(self) -> bool:
+        if self.driver is None:
+            return False
+        script = r"""
+        const labels = arguments[0];
+        for (const label of labels) {
+            for (const el of document.querySelectorAll("a,button,li,div,span")) {
+                const text = (el.innerText || "").replace(/\s+/g, "").trim();
+                if (!text || text.length > 40) continue;
+                const rect = el.getBoundingClientRect();
+                if (rect.width < 10 || rect.height < 10) continue;
+                if (text === label || text.includes(label)) { el.click(); return true; }
+            }
+        }
+        return false;
+        """
+        try:
+            return bool(self.driver.execute_script(script, ["高手论坛", "论坛", "帖子", "资料"]))
+        except Exception:
+            return False
+
+    def try_click_best_post(self, period: int) -> bool:
+        if self.driver is None:
+            return False
+        script = r"""
+        const period = String(arguments[0]);
+        const keywordRe = /绝\s*杀\s*一\s*合|杀.{0,80}\d{1,2}\s*合/;
+        let best = null;
+        for (const el of document.querySelectorAll("a,article,li,section,div")) {
+            const text = (el.innerText || "").replace(/\s+/g, " ").trim();
+            if (!text || text.length < 6 || text.length > 900) continue;
+            const rect = el.getBoundingClientRect();
+            if (rect.width < 30 || rect.height < 12) continue;
+            let score = 0;
+            if (text.includes(period + "期")) score += 60;
+            if (keywordRe.test(text)) score += 80;
+            if (/\d{1,2}\s*合/.test(text)) score += 20;
+            if (/论坛|主页|首页|返回|登录|注册/.test(text)) score -= 30;
+            if (score < 80) continue;
+            const item = { el, score, top: rect.top };
+            if (!best || item.score > best.score || (item.score === best.score && item.top < best.top)) best = item;
+        }
+        if (!best) return false;
+        best.el.click();
+        return true;
+        """
+        try:
+            return bool(self.driver.execute_script(script, period))
+        except Exception:
+            return False
+
+
+def close_browser_safely(browser: BrowserClient) -> None:
+    try:
+        browser.close()
+    except Exception:
+        pass
+
+
+class BrowserPool:
+    def __init__(self, size: int, headless: bool = True, client_factory=None):
+        self.size = max(0, size)
+        self.headless = headless
+        self.client_factory = client_factory or BrowserClient
+        self.available: Queue = Queue(maxsize=self.size or 1)
+        self.clients: set[BrowserClient] = set()
+        self.clients_lock = Lock()
+        self.lifecycle_lock = Lock()
+        self.failure_token = object()
+        self.failure: Exception | None = None
+        self.started = False
+
+    def _create_client(self) -> BrowserClient:
+        client = self.client_factory(headless=self.headless)
+        try:
+            client.start()
+        except Exception:
+            close_browser_safely(client)
+            raise
+        with self.clients_lock:
+            self.clients.add(client)
+        return client
+
+    def start(self) -> None:
+        with self.lifecycle_lock:
+            if self.started:
+                return
+            if self.size == 0:
+                raise RuntimeError("browser pool size must be positive")
+            self.available = Queue(maxsize=self.size)
+            self.failure = None
+            created = []
+            try:
+                for _ in range(self.size):
+                    client = self._create_client()
+                    created.append(client)
+                    self.available.put(client)
+            except Exception:
+                with self.clients_lock:
+                    for client in created:
+                        self.clients.discard(client)
+                for client in created:
+                    close_browser_safely(client)
+                raise
+            self.started = True
+
+    def _mark_failed(self, exc: Exception) -> None:
+        with self.clients_lock:
+            if self.failure is None:
+                self.failure = exc
+        try:
+            self.available.put_nowait(self.failure_token)
+        except Full:
+            pass
+
+    def _replace_after_cleanup_failure(self, client: BrowserClient) -> Exception | None:
+        with self.clients_lock:
+            self.clients.discard(client)
+        close_browser_safely(client)
+        try:
+            replacement = self._create_client()
+        except Exception as exc:
+            self._mark_failed(exc)
+            return exc
+        self.available.put(replacement)
+        return None
+
+    def run(self, operation):
+        if not self.started:
+            self.start()
+        with self.clients_lock:
+            failure = self.failure
+        if failure is not None:
+            raise failure
+        client = self.available.get()
+        if client is self.failure_token:
+            self.available.put(self.failure_token)
+            with self.clients_lock:
+                failure = self.failure
+            raise failure or RuntimeError("browser pool unavailable")
+        operation_error = None
+        try:
+            result = operation(client)
+        except BaseException as exc:
+            operation_error = exc
+            result = None
+        cleanup_error = None
+        with self.clients_lock:
+            pool_failed = self.failure is not None
+        if pool_failed:
+            with self.clients_lock:
+                self.clients.discard(client)
+            close_browser_safely(client)
+        else:
+            clear_site_state = getattr(client, "clear_site_state", None)
+            if clear_site_state is None:
+                self.available.put(client)
+            else:
+                try:
+                    clear_site_state()
+                except Exception:
+                    cleanup_error = self._replace_after_cleanup_failure(client)
+                else:
+                    self.available.put(client)
+        if operation_error is not None:
+            raise operation_error
+        if cleanup_error is not None:
+            return result
+        return result
+
+    def close(self) -> None:
+        with self.lifecycle_lock:
+            with self.clients_lock:
+                clients = list(self.clients)
+                self.clients.clear()
+            for client in clients:
+                close_browser_safely(client)
+            self.started = False
+
+
+def default_browser_pool_size(sites: list[Site], workers: int) -> int:
+    browser_site_count = sum(1 for site in sites if site.browser)
+    if browser_site_count == 0:
+        return 0
+    return min(3, max(1, workers), browser_site_count)

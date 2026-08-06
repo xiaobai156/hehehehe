@@ -1,0 +1,173 @@
+    1: import ctypes
+    1: import hashlib
+    1: import os
+    1: import tempfile
+    1: import time
+    1: from contextlib import contextmanager
+    1: from pathlib import Path
+    1: from threading import Lock
+       
+       
+    1: PATH_LOCKS: dict[str, Lock] = {}
+    1: PATH_LOCKS_GUARD = Lock()
+       
+       
+    1: def process_path_lock(path: Path) -> Lock:
+   11:     key = str(path.resolve()).lower()
+   22:     with PATH_LOCKS_GUARD:
+   11:         lock = PATH_LOCKS.get(key)
+   11:         if lock is None:
+   11:             lock = Lock()
+   11:             PATH_LOCKS[key] = lock
+   11:         return lock
+       
+       
+    1: def _path_mutex_name(path: Path) -> str:
+   11:     digest = hashlib.sha256(str(path.resolve()).casefold().encode("utf-8")).hexdigest()
+   11:     return f"Local\\CodexHeCrawler-{digest}"
+       
+       
+    1: @contextmanager
+    1: def _windows_named_mutex(path: Path, timeout: float | None):
+   11:     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+   11:     kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]
+   11:     kernel32.CreateMutexW.restype = ctypes.c_void_p
+   11:     kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+   11:     kernel32.WaitForSingleObject.restype = ctypes.c_uint32
+   11:     kernel32.ReleaseMutex.argtypes = [ctypes.c_void_p]
+   11:     kernel32.ReleaseMutex.restype = ctypes.c_bool
+   11:     kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+   11:     kernel32.CloseHandle.restype = ctypes.c_bool
+       
+   11:     handle = kernel32.CreateMutexW(None, False, _path_mutex_name(path))
+   11:     if not handle:
+>>>>>>         raise ctypes.WinError(ctypes.get_last_error())
+   11:     acquired = False
+   11:     try:
+   11:         wait_ms = 0xFFFFFFFF if timeout is None else max(0, int(timeout * 1000))
+   11:         result = kernel32.WaitForSingleObject(handle, wait_ms)
+   11:         if result == 0x102:
+>>>>>>             raise TimeoutError(f"等待文件锁超时: {path}")
+   11:         if result == 0xFFFFFFFF:
+>>>>>>             raise ctypes.WinError(ctypes.get_last_error())
+   11:         if result not in (0, 0x80):
+>>>>>>             raise RuntimeError(f"等待文件锁失败: {path}")
+   11:         acquired = True
+   11:         yield
+           finally:
+   11:         if acquired:
+   11:             kernel32.ReleaseMutex(handle)
+   11:         kernel32.CloseHandle(handle)
+       
+       
+    1: @contextmanager
+    1: def _portable_process_lock(path: Path, timeout: float | None):
+>>>>>>     import fcntl
+       
+>>>>>>     digest = hashlib.sha256(str(path.resolve()).encode("utf-8")).hexdigest()
+>>>>>>     lock_path = Path(tempfile.gettempdir()) / f"codex-he-{digest}.sync"
+>>>>>>     with lock_path.open("a+b") as lock_file:
+>>>>>>         deadline = None if timeout is None else time.monotonic() + max(0.0, timeout)
+>>>>>>         while True:
+>>>>>>             try:
+>>>>>>                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+>>>>>>                 break
+>>>>>>             except BlockingIOError:
+>>>>>>                 if deadline is not None and time.monotonic() >= deadline:
+>>>>>>                     raise TimeoutError(f"等待文件锁超时: {path}")
+>>>>>>                 time.sleep(0.05)
+>>>>>>         try:
+>>>>>>             yield
+               finally:
+>>>>>>             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+       
+       
+    1: @contextmanager
+    1: def exclusive_path_lock(path: Path, timeout: float | None = None):
+   11:     path.parent.mkdir(parents=True, exist_ok=True)
+   11:     deadline = None if timeout is None else time.monotonic() + max(0.0, timeout)
+   11:     thread_lock = process_path_lock(path)
+   11:     if deadline is None:
+   11:         thread_lock.acquire()
+>>>>>>     elif not thread_lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
+>>>>>>         raise TimeoutError(f"等待文件锁超时: {path}")
+   11:     try:
+   11:         remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+   11:         process_lock = _windows_named_mutex(path, remaining) if os.name == "nt" else _portable_process_lock(path, remaining)
+   22:         with process_lock:
+   11:             yield
+           finally:
+   11:         thread_lock.release()
+       
+       
+    1: def write_text_atomic_unlocked(path: Path, text: str, encoding: str) -> None:
+    6:     path.parent.mkdir(parents=True, exist_ok=True)
+    6:     descriptor, temp_name = tempfile.mkstemp(prefix=f"{path.name}.", suffix=".tmp", dir=path.parent)
+    6:     temp_path = Path(temp_name)
+    6:     try:
+   12:         with os.fdopen(descriptor, "w", encoding=encoding, newline="") as temp_file:
+    6:             temp_file.write(text)
+    6:             temp_file.flush()
+    6:             os.fsync(temp_file.fileno())
+    6:         temp_path.replace(path)
+           finally:
+    6:         if temp_path.exists():
+>>>>>>             temp_path.unlink()
+       
+       
+    1: def write_text_atomic(path: Path, text: str, encoding: str = "utf-8-sig") -> None:
+>>>>>>     with exclusive_path_lock(path):
+>>>>>>         write_text_atomic_unlocked(path, text, encoding)
+       
+       
+    3: def commit_text_transaction_unlocked(
+    1:     changes: dict[Path, tuple[str, str] | None],
+    1: ) -> None:
+    5:     originals: dict[Path, bytes | None] = {}
+    5:     staged: dict[Path, Path] = {}
+    5:     committed: list[Path] = []
+    5:     try:
+   15:         for path, change in changes.items():
+   10:             path.parent.mkdir(parents=True, exist_ok=True)
+   10:             originals[path] = path.read_bytes() if path.exists() else None
+   10:             if change is None:
+    2:                 continue
+    8:             text, encoding = change
+    8:             descriptor, temp_name = tempfile.mkstemp(prefix=f"{path.name}.", suffix=".tmp", dir=path.parent)
+    8:             temp_path = Path(temp_name)
+   16:             with os.fdopen(descriptor, "w", encoding=encoding, newline="") as temp_file:
+    8:                 temp_file.write(text)
+    8:                 temp_file.flush()
+    8:                 os.fsync(temp_file.fileno())
+    8:             staged[path] = temp_path
+       
+   14:         for path, change in changes.items():
+   10:             if change is None:
+    2:                 if path.exists():
+>>>>>>                     path.unlink()
+                   else:
+    8:                 staged[path].replace(path)
+    9:             committed.append(path)
+    1:     except Exception:
+    2:         for path in reversed(committed):
+    1:             original = originals[path]
+    1:             if original is None:
+>>>>>>                 if path.exists():
+>>>>>>                     path.unlink()
+>>>>>>                 continue
+    1:             descriptor, temp_name = tempfile.mkstemp(prefix=f"{path.name}.", suffix=".rollback.tmp", dir=path.parent)
+    1:             restore_path = Path(temp_name)
+    1:             try:
+    2:                 with os.fdopen(descriptor, "wb") as restore_file:
+    1:                     restore_file.write(original)
+    1:                     restore_file.flush()
+    1:                     os.fsync(restore_file.fileno())
+    1:                 restore_path.replace(path)
+                   finally:
+    1:                 if restore_path.exists():
+>>>>>>                     restore_path.unlink()
+    1:         raise
+           finally:
+   13:         for temp_path in staged.values():
+    8:             if temp_path.exists():
+    1:                 temp_path.unlink()

@@ -1,0 +1,1257 @@
+    1: import re
+       
+       # ruff: noqa: F403,F405
+       
+    1: from bs4 import BeautifulSoup
+       
+    1: from he_app.domain.errors import DedicatedCandidateConflict
+    1: from he_app.domain.models import Candidate, Site
+    1: from he_app.domain.policies import normalize_digit_text, normalize_pick, normalize_text
+    1: from he_app.parsers.common import *
+    1: from he_app.parsers.dedicated.structured import *
+    1: from he_app.parsers.dedicated.tables import *
+    1: from he_app.parsers.policies import *
+    1: from he_app.validation.direction import directional_window
+       
+       
+    5: def extract_kill_sum_period_values(
+    1:     documents: list[str],
+    2:     pick: str = "top",
+    2:     allow_weak: bool = False,
+    1: ) -> dict[int, str]:
+>>>>>>     values: dict[int, str] = {}
+>>>>>>     conflicts: set[int] = set()
+>>>>>>     pick = normalize_pick(pick)
+>>>>>>     patterns = [
+>>>>>>         re.compile(
+>>>>>>             r"(?<!\d)(\d{1,4})\s*期\s*[:：]?\s*绝\s*杀\s*一\s*合\s*[\(\[]\s*"
+                   r"(0?[1-9]|1[0-3])\s*合\s*[\)\]]"
+               ),
+>>>>>>         re.compile(
+>>>>>>             r"(?<!\d)(\d{1,4})\s*期\s*[:：]?\s*绝\s*杀\s*一\s*合[^\n]{0,12}?"
+                   r"\[\s*合\s*(0?[1-9]|1[0-3])\s*\]"
+               ),
+>>>>>>         re.compile(
+>>>>>>             r"(?<!\d)(\d{1,4})\s*期\s*[:：]?\s*\[\s*绝\s*杀\s*一\s*合\s*\]\s*"
+                   r"\[\s*(0?[1-9]|1[0-3])\s*合\s*\]"
+               ),
+           ]
+       
+>>>>>>     for document in documents:
+>>>>>>         lines = document_text_lines(document)
+>>>>>>         for line in lines:
+>>>>>>             normalized = normalize_digit_text(normalize_text(line))
+>>>>>>             if not has_kill_sum_keyword(normalized, allow_weak):
+>>>>>>                 continue
+>>>>>>             for pattern in patterns:
+>>>>>>                 for match in pattern.finditer(normalized):
+>>>>>>                     period = int(match.group(1))
+>>>>>>                     value = int(match.group(2))
+>>>>>>                     if not 1 <= value <= 13 or period in conflicts:
+>>>>>>                         continue
+>>>>>>                     item = f"{value:02d}合"
+>>>>>>                     existing = values.get(period)
+>>>>>>                     if existing is not None and existing != item:
+>>>>>>                         conflicts.add(period)
+>>>>>>                         values.pop(period, None)
+>>>>>>                         continue
+>>>>>>                     if existing is None or pick == "bottom":
+>>>>>>                         values[period] = item
+>>>>>>     return values
+       
+       
+    1: def find_jincaishen_kill_sum_candidate(documents: list[str], period: int, pick: str) -> Candidate | None:
+>>>>>>     row_re = re.compile(
+>>>>>>         rf"(?<!\d){re.escape(str(period))}\s*期\s*"
+               rf"绝\s*杀\s*一\s*合\s*[\(（]\s*(0?[1-9]|1[0-3])\s*合\s*[\)）]\s*开"
+           )
+>>>>>>     matches: list[Candidate] = []
+>>>>>>     groups: list[list[Candidate]] = []
+>>>>>>     order = 0
+>>>>>>     for document in documents:
+>>>>>>         text = normalize_digit_text(normalize_text(BeautifulSoup(document, "html.parser").get_text(" ", strip=True) or document))
+>>>>>>         lines = [normalize_digit_text(normalize_text(line)) for line in document_text_lines(document)]
+>>>>>>         lines.extend(split_all_period_segments(text))
+>>>>>>         seen_lines: set[str] = set()
+>>>>>>         document_groups: list[list[Candidate]] = []
+>>>>>>         last_target_index: int | None = None
+>>>>>>         for index, line in enumerate(lines):
+>>>>>>             if line in seen_lines:
+>>>>>>                 continue
+>>>>>>             seen_lines.add(line)
+>>>>>>             match = row_re.search(line)
+>>>>>>             if match is None:
+>>>>>>                 continue
+>>>>>>             value = f"{int(match.group(1)):02d}合"
+>>>>>>             candidate = Candidate(value, line, score_candidate(line, [value]), order)
+>>>>>>             between = " ".join(lines[last_target_index:index + 1]) if last_target_index is not None else ""
+>>>>>>             if last_target_index is None or has_period_cycle_boundary(between):
+>>>>>>                 document_groups.append([])
+>>>>>>             document_groups[-1].append(candidate)
+>>>>>>             last_target_index = index
+>>>>>>             matches.append(candidate)
+>>>>>>             order += 1
+>>>>>>         groups.extend(document_groups)
+       
+>>>>>>     if not matches:
+>>>>>>         return None
+>>>>>>     return select_directional_candidate_group(groups, pick)
+       
+       
+    1: def find_yidianhong_kill_sum_candidate(documents: list[str], period: int, pick: str) -> Candidate | None:
+>>>>>>     title_re = re.compile(
+>>>>>>         r"高\s*手\s*贴\s*\d{1,4}\s*期\s*[\[【]\s*绝\s*杀\s*一\s*合\s*[\]】]\s*已\s*公\s*开"
+           )
+>>>>>>     stop_re = re.compile(r"站\s*长\s*宣\s*言")
+>>>>>>     row_re = re.compile(
+>>>>>>         r"(?<!\d)(\d{1,4})\s*期\s*[:：]?\s*"
+               r"绝\s*杀\s*一\s*合\s*[\[【]\s*(0?[1-9]|1[0-3])\s*合\s*[\]】]\s*开"
+           )
+       
+>>>>>>     groups: list[list[tuple[int, Candidate]]] = []
+>>>>>>     order = 0
+>>>>>>     for document in documents:
+>>>>>>         text = normalize_digit_text(
+>>>>>>             normalize_text(BeautifulSoup(document, "html.parser").get_text(" ", strip=True) or document)
+               )
+>>>>>>         for title_match in title_re.finditer(text):
+>>>>>>             stop_match = stop_re.search(text, title_match.end())
+>>>>>>             if stop_match is None:
+>>>>>>                 continue
+>>>>>>             section = text[title_match.start() : stop_match.end()]
+>>>>>>             matches: list[tuple[int, Candidate]] = []
+>>>>>>             for match in row_re.finditer(section):
+>>>>>>                 row_period = int(match.group(1))
+>>>>>>                 value = f"{int(match.group(2)):02d}合"
+>>>>>>                 line = normalize_text(match.group(0))
+>>>>>>                 matches.append((row_period, Candidate(value, line, score_candidate(line, [value]), order)))
+>>>>>>                 order += 1
+>>>>>>             if matches:
+>>>>>>                 groups.append(matches)
+       
+>>>>>>     selected_groups = directional_window(groups, pick, 1)
+>>>>>>     matches = [
+>>>>>>         candidate
+>>>>>>         for group in selected_groups
+>>>>>>         for row_period, candidate in directional_window(group, pick, 1)
+>>>>>>         if row_period == period
+           ]
+>>>>>>     return select_dedicated_candidate(matches, pick)
+       
+       
+    1: def find_youzuichunshe_kill_sum_candidate(documents: list[str], period: int, pick: str) -> Candidate | None:
+>>>>>>     title_re = re.compile(r"^\s*高手贴\s*\d+\s*期\s*[\[【]\s*绝\s*杀\s*一\s*合\s*[\]】]\s*已公开\s*$")
+>>>>>>     author_re = re.compile(r"^\s*作者\s*[:：]\s*油嘴油舌\s*$")
+>>>>>>     row_re = re.compile(
+>>>>>>         rf"^\s*{re.escape(str(period))}\s*期\s*绝\s*杀\s*一\s*合\s*→\s*"
+               rf"[\[【]\s*合\s*(20|0?[1-9]|1[0-3])\s*[\]】]\s*开\s*[:：]?"
+           )
+>>>>>>     matches: list[Candidate] = []
+>>>>>>     groups: list[list[Candidate]] = []
+>>>>>>     order = 0
+>>>>>>     for document in documents:
+>>>>>>         title_seen = False
+>>>>>>         in_author_block = False
+>>>>>>         lines = [normalize_digit_text(normalize_text(line)) for line in document_text_lines(document)]
+>>>>>>         document_groups: list[list[Candidate]] = []
+>>>>>>         last_target_index: int | None = None
+>>>>>>         for index, normalized in enumerate(lines):
+>>>>>>             title_window = normalize_text("".join(lines[max(0, index - 3) : index + 1]))
+>>>>>>             if title_re.fullmatch(normalized) or title_re.fullmatch(title_window):
+>>>>>>                 title_seen = True
+>>>>>>                 in_author_block = False
+>>>>>>                 continue
+>>>>>>             if title_seen and author_re.fullmatch(normalized):
+>>>>>>                 in_author_block = True
+>>>>>>                 continue
+>>>>>>             if not in_author_block:
+>>>>>>                 continue
+>>>>>>             if normalized.startswith("作者") or title_re.fullmatch(normalized):
+>>>>>>                 in_author_block = False
+>>>>>>                 continue
+>>>>>>             match = row_re.match(normalized)
+>>>>>>             if match is None:
+>>>>>>                 continue
+>>>>>>             raw_value = match.group(1)
+>>>>>>             value = "02合" if raw_value == "20" else f"{int(raw_value):02d}合"
+>>>>>>             candidate = Candidate(value, normalized, score_candidate(normalized, [value]), order)
+>>>>>>             between = " ".join(lines[last_target_index:index + 1]) if last_target_index is not None else ""
+>>>>>>             if last_target_index is None or has_period_cycle_boundary(between):
+>>>>>>                 document_groups.append([])
+>>>>>>             document_groups[-1].append(candidate)
+>>>>>>             last_target_index = index
+>>>>>>             matches.append(candidate)
+>>>>>>             order += 1
+>>>>>>         groups.extend(document_groups)
+       
+>>>>>>     if not matches:
+>>>>>>         return None
+>>>>>>     return select_directional_candidate_group(groups, pick)
+       
+       
+       
+    1: def _toutianhuanri_rows(documents: list[str]) -> list[list[tuple[int, Candidate]]]:
+>>>>>>     title_re = re.compile(
+>>>>>>         r"^\s*\d+\s*期\s*[:：]?\s*[\(\[（【]\s*偷\s*天\s*换\s*日\s*[\)\]）】]"
+           )
+>>>>>>     author_re = re.compile(r"偷\s*天\s*换\s*日\s*发\s*表")
+>>>>>>     row_re = re.compile(
+>>>>>>         r"(?<!\d)(\d{1,4})\s*期\s*[:：]?\s*[\[【]\s*"
+               r"稳\s*杀\s*一\s*合\s*[\]】]\s*[\[【]\s*(0?[1-9]|1[0-3])\s*合\s*[\]】]\s*开"
+           )
+>>>>>>     groups: list[list[tuple[int, Candidate]]] = []
+>>>>>>     order = 0
+>>>>>>     for document in documents:
+>>>>>>         lines = [normalize_digit_text(normalize_text(line)) for line in document_text_lines(document)]
+>>>>>>         title_seen = False
+>>>>>>         keyword_seen = False
+>>>>>>         section_lines: list[str] = []
+>>>>>>         for line in lines:
+>>>>>>             if title_re.search(line):
+>>>>>>                 title_seen = True
+>>>>>>                 keyword_seen = False
+>>>>>>                 section_lines = []
+>>>>>>                 continue
+>>>>>>             if title_seen and not keyword_seen and re.search(r"稳\s*杀\s*一\s*合", line):
+>>>>>>                 keyword_seen = True
+>>>>>>                 continue
+>>>>>>             if title_seen and keyword_seen and author_re.search(line):
+>>>>>>                 continue
+>>>>>>             if not (title_seen and keyword_seen):
+>>>>>>                 continue
+>>>>>>             if "合数属性" in line or "01合:" in line:
+>>>>>>                 break
+>>>>>>             section_lines.append(line)
+>>>>>>         if section_lines:
+>>>>>>             section_text = normalize_text(" ".join(section_lines))
+>>>>>>             rows: list[tuple[int, Candidate]] = []
+>>>>>>             for match in row_re.finditer(section_text):
+>>>>>>                 row_period = int(match.group(1))
+>>>>>>                 value = f"{int(match.group(2)):02d}合"
+>>>>>>                 line_text = normalize_text(match.group(0))
+>>>>>>                 rows.append(
+>>>>>>                     (
+>>>>>>                         row_period,
+>>>>>>                         Candidate(value, line_text, score_candidate(line_text, [value]), order),
+                           )
+                       )
+>>>>>>                 order += 1
+>>>>>>             if rows:
+>>>>>>                 groups.append(rows)
+       
+>>>>>>     return groups
+       
+       
+    1: def find_toutianhuanri_kill_sum_candidate(documents: list[str], period: int, pick: str) -> Candidate | None:
+>>>>>>     groups = _toutianhuanri_rows(documents)
+>>>>>>     selected_groups = directional_window(groups, pick, 1)
+>>>>>>     matches = [
+>>>>>>         candidate
+>>>>>>         for group in selected_groups
+>>>>>>         for row_period, candidate in directional_window(group, pick, 1)
+>>>>>>         if row_period == period
+           ]
+>>>>>>     return select_dedicated_candidate(matches, pick)
+       
+       
+    5: def find_toutianhuanri_kill_sum_candidate_with_direction(
+    3:     documents: list[str], period: int, pick: str
+    1: ) -> tuple[Candidate | None, bool]:
+>>>>>>     groups = _toutianhuanri_rows(documents)
+>>>>>>     if not groups:
+>>>>>>         return None, False
+>>>>>>     selected_group = directional_window(groups, pick, 1)[0]
+>>>>>>     matches = [
+>>>>>>         candidate
+>>>>>>         for row_period, candidate in directional_window(selected_group, pick, 1)
+>>>>>>         if row_period == period
+           ]
+>>>>>>     candidate = select_dedicated_candidate(matches, pick)
+>>>>>>     outside = any(row_period == period for group in groups for row_period, _candidate in group) and candidate is None
+>>>>>>     return candidate, outside
+       
+       
+    1: def find_woyaobaoma_kill_sum_candidate(documents: list[str], period: int, pick: str) -> Candidate | None:
+>>>>>>     title_re = re.compile(r"^\s*\d+\s*期\s*[:：]\s*[\[【]\s*绝\s*杀\s*一\s*合\s*[\]】]\s*$")
+>>>>>>     author_re = re.compile(r"^\s*作者\s*[:：]\s*我\s*要\s*宝\s*马\s*$")
+>>>>>>     row_re = re.compile(
+>>>>>>         rf"(?<!\d){re.escape(str(period))}\s*期\s*[:：]?\s*"
+               rf"❀?\s*绝\s*杀\s*一\s*合\s*❀?\s*[\[【]\s*(0?[1-9]|1[0-3])\s*合\s*[\]】]\s*开"
+           )
+>>>>>>     matches: list[Candidate] = []
+>>>>>>     order = 0
+>>>>>>     for document in documents:
+>>>>>>         lines = [normalize_digit_text(normalize_text(line)) for line in document_text_lines(document)]
+>>>>>>         in_section = False
+>>>>>>         section_lines: list[str] = []
+>>>>>>         for line in lines:
+>>>>>>             if title_re.search(line):
+>>>>>>                 section_lines = []
+>>>>>>                 in_section = False
+>>>>>>                 continue
+>>>>>>             if author_re.search(line):
+>>>>>>                 in_section = True
+>>>>>>                 section_lines = []
+>>>>>>                 continue
+>>>>>>             if not in_section:
+>>>>>>                 continue
+>>>>>>             if "Copyright" in line or "版权所有" in line:
+>>>>>>                 break
+>>>>>>             section_lines.append(line)
+>>>>>>         if section_lines:
+>>>>>>             section_text = normalize_text(" ".join(section_lines))
+>>>>>>             for match in row_re.finditer(section_text):
+>>>>>>                 value = f"{int(match.group(1)):02d}合"
+>>>>>>                 line_text = normalize_text(match.group(0))
+>>>>>>                 matches.append(Candidate(value, line_text, score_candidate(line_text, [value]), order))
+>>>>>>                 order += 1
+       
+>>>>>>     if not matches:
+>>>>>>         return None
+>>>>>>     return select_dedicated_candidate(matches, pick)
+       
+       
+    1: def find_yaoweiqiushi_kill_sum_candidate(documents: list[str], period: int, pick: str) -> Candidate | None:
+>>>>>>     title_re = re.compile(r"^\s*\d+\s*期\s*[:：]\s*[\[【]\s*摇\s*尾\s*求\s*食\s*★\s*绝\s*杀\s*一\s*合\s*[\]】]\s*$")
+>>>>>>     author_re = re.compile(r"^\s*作者\s*[:：]\s*摇\s*尾\s*求\s*食\s*$")
+>>>>>>     row_re = re.compile(
+>>>>>>         rf"(?<!\d){re.escape(str(period))}\s*期\s*[:：]\s*[\[【]\s*绝\s*杀\s*一\s*合\s*[\]】]\s*"
+               rf"[\[【]\s*(0?[1-9]|1[0-3])\s*合\s*[\]】]\s*开\s*[:：]?"
+           )
+>>>>>>     matches: list[Candidate] = []
+>>>>>>     groups: list[list[Candidate]] = []
+>>>>>>     order = 0
+>>>>>>     for document in documents:
+>>>>>>         lines = [normalize_digit_text(normalize_text(line)) for line in document_text_lines(document)]
+>>>>>>         in_section = False
+>>>>>>         section_lines: list[str] = []
+>>>>>>         for line in lines:
+>>>>>>             if title_re.search(line):
+>>>>>>                 in_section = False
+>>>>>>                 section_lines = []
+>>>>>>                 continue
+>>>>>>             if author_re.search(line):
+>>>>>>                 in_section = True
+>>>>>>                 section_lines = []
+>>>>>>                 continue
+>>>>>>             if not in_section:
+>>>>>>                 continue
+>>>>>>             if "合数属性" in line or "01合:" in line:
+>>>>>>                 break
+>>>>>>             section_lines.append(line)
+>>>>>>         if section_lines:
+>>>>>>             section_text = normalize_text(" ".join(section_lines))
+>>>>>>             document_groups: list[list[Candidate]] = []
+>>>>>>             last_match_start: int | None = None
+>>>>>>             for match in row_re.finditer(section_text):
+>>>>>>                 value = f"{int(match.group(1)):02d}合"
+>>>>>>                 line_text = normalize_text(match.group(0))
+>>>>>>                 candidate = Candidate(value, line_text, score_candidate(line_text, [value]), order)
+>>>>>>                 between = section_text[last_match_start:match.end()] if last_match_start is not None else ""
+>>>>>>                 if last_match_start is None or has_period_cycle_boundary(between):
+>>>>>>                     document_groups.append([])
+>>>>>>                 document_groups[-1].append(candidate)
+>>>>>>                 last_match_start = match.start()
+>>>>>>                 matches.append(candidate)
+>>>>>>                 order += 1
+>>>>>>             groups.extend(document_groups)
+       
+>>>>>>     if not matches:
+>>>>>>         return None
+>>>>>>     return select_directional_candidate_group(groups, pick)
+       
+       
+    1: BATCH_NEW_DEDICATED_SITE_IDS = {
+           "s097_topic_250886",
+           "s098_topic_227257",
+           "s099_topic_464275",
+           "s100_topic_205318",
+           "s101_topic_274142",
+           "s102_979585_bbs_160",
+           "s103_979585_bbs_139",
+           "s104_topic_245375",
+           "s105_topic_213777",
+           "s106_topic_281519",
+           "s107_topic_453800",
+           "s108_topic_1024380",
+           "s109_topic_222783",
+           "s110_aa_676595a",
+           "s111_mm_737799b_art_gsb_8149",
+           "s112_dd_62782b_bbs_10699",
+           "s113_cc_62782b_bbs_10745",
+           "s114_dd_636396m_bbs_10695",
+           "s115_topic_440075",
+           "s116_topic_440127",
+           "s117_993345_gsb_025",
+           "s118_topic_1024655",
+           "s119_topic_1024654",
+           "s121_topic_224339",
+           "s122_kk_336868m_art_zhuanqu_8039",
+           "s123_kk_336868m_art_zhuanqu_8149",
+           "s124_22_868393c_art_zhuanqu_8129",
+           "s125_kk_375737m",
+           "s126_topic_930870",
+       }
+       
+       
+    2: HUSHUOBA_DAO_HISTORY_ROW_RE = re.compile(
+    1:     r"(?<!\d)(\d{1,4})\s*期\s*[:：]?\s*\[\s*绝\s*杀\s*一\s*合\s*\]\s*"
+           r"\[\s*(0?[1-9]|1[0-3])\s*合\s*\]\s*开",
+    1:     re.I,
+       )
+    2: RUYIMUTAN_HISTORY_ROW_RE = re.compile(
+    1:     r"(?<!\d)(\d{1,4})\s*期\s*绝\s*杀\s*一\s*合\s*[\[(]\s*"
+           r"(0?[1-9]|1[0-3])\s*合\s*[\])]\s*开",
+    1:     re.I,
+       )
+       
+       
+    1: def hushuobadao_author_blocks(documents: list[str]) -> tuple[list[list[Candidate]], bool]:
+>>>>>>     blocks: list[list[Candidate]] = []
+>>>>>>     current: list[Candidate] | None = None
+>>>>>>     started = False
+>>>>>>     found_anchor = False
+>>>>>>     order = 0
+       
+>>>>>>     def finish() -> None:
+               nonlocal current, started
+>>>>>>         if current:
+>>>>>>             blocks.append(current)
+>>>>>>         current = None
+>>>>>>         started = False
+       
+>>>>>>     for document in documents:
+>>>>>>         lines = [normalize_digit_text(normalize_text(line)) for line in document_text_lines(document)]
+>>>>>>         anchor_index = next(
+>>>>>>             (index for index, line in enumerate(lines) if re.search(r"胡说八道\s+发表于", line)),
+>>>>>>             None,
+               )
+>>>>>>         if anchor_index is not None:
+>>>>>>             if current is not None:
+>>>>>>                 finish()
+>>>>>>             found_anchor = True
+>>>>>>             current = []
+>>>>>>             started = False
+>>>>>>             lines = lines[anchor_index + 1 :]
+>>>>>>         elif current is None:
+>>>>>>             continue
+>>>>>>         elif any("发表于" in line or re.match(r"^作者\s*[:：]", line) for line in lines):
+>>>>>>             finish()
+>>>>>>             continue
+       
+>>>>>>         rows: list[Candidate] = []
+>>>>>>         combined = normalize_digit_text(normalize_text(" ".join(lines)))
+>>>>>>         for match in HUSHUOBA_DAO_HISTORY_ROW_RE.finditer(combined):
+>>>>>>             line = normalize_text(match.group(0))
+>>>>>>             rows.append(Candidate(f"{int(match.group(2)):02d}合", line, 120, order))
+>>>>>>             order += 1
+>>>>>>         if rows:
+>>>>>>             current = (current or []) + rows
+>>>>>>             started = True
+>>>>>>         elif started:
+>>>>>>             finish()
+       
+>>>>>>     if current:
+>>>>>>         blocks.append(current)
+>>>>>>     return blocks, found_anchor
+       
+       
+    5: def find_hushuobadao_kill_sum_candidate(
+    3:     documents: list[str], period: int, pick: str
+    1: ) -> tuple[Candidate | None, bool, bool]:
+>>>>>>     blocks, found_anchor = hushuobadao_author_blocks(documents)
+>>>>>>     if not blocks:
+>>>>>>         return None, False, found_anchor
+>>>>>>     directional_blocks = directional_window(blocks, pick, 1)
+>>>>>>     directional_rows = directional_window(
+>>>>>>         [row for block in directional_blocks for row in block], pick, 1
+           )
+>>>>>>     matches = [
+>>>>>>         row
+>>>>>>         for row in directional_rows
+>>>>>>         if int(HUSHUOBA_DAO_HISTORY_ROW_RE.match(row.line).group(1)) == period
+           ]
+>>>>>>     all_matches = [
+>>>>>>         row
+>>>>>>         for block in blocks
+>>>>>>         for row in block
+>>>>>>         if int(HUSHUOBA_DAO_HISTORY_ROW_RE.match(row.line).group(1)) == period
+           ]
+>>>>>>     if matches:
+>>>>>>         return select_dedicated_candidate(matches, pick), False, True
+>>>>>>     return None, bool(all_matches), True
+       
+       
+    1: def extract_hushuobadao_kill_sum_period_values(documents: list[str]) -> dict[int, str]:
+>>>>>>     blocks, _found_anchor = hushuobadao_author_blocks(documents)
+>>>>>>     values: dict[int, str] = {}
+>>>>>>     for block in blocks:
+>>>>>>         for row in block:
+>>>>>>             period = int(HUSHUOBA_DAO_HISTORY_ROW_RE.match(row.line).group(1))
+>>>>>>             existing = values.get(period)
+>>>>>>             if existing is not None and existing != row.values:
+>>>>>>                 raise DedicatedCandidateConflict([existing, row.values], [row.line])
+>>>>>>             values[period] = row.values
+>>>>>>     return values
+       
+       
+    1: def ruyimutan_author_content_blocks(documents: list[str]) -> list[list[Candidate]]:
+>>>>>>     blocks: list[list[Candidate]] = []
+>>>>>>     order = 0
+>>>>>>     for document in documents:
+>>>>>>         soup = BeautifulSoup(document, "html.parser")
+>>>>>>         for author in soup.select(".topic-author"):
+>>>>>>             author_text = normalize_text(author.get_text(" ", strip=True))
+>>>>>>             if "如蚁慕膻" not in author_text:
+>>>>>>                 continue
+>>>>>>             content = author.find_next(class_="topic-content")
+>>>>>>             if content is None:
+>>>>>>                 continue
+>>>>>>             text = normalize_digit_text(normalize_text(content.get_text(" ", strip=True)))
+>>>>>>             text = text.split("澳彩合数属性", 1)[0]
+>>>>>>             rows: list[Candidate] = []
+>>>>>>             for match in RUYIMUTAN_HISTORY_ROW_RE.finditer(text):
+>>>>>>                 rows.append(
+>>>>>>                     Candidate(
+>>>>>>                         f"{int(match.group(2)):02d}合",
+>>>>>>                         normalize_text(match.group(0)),
+>>>>>>                         120,
+>>>>>>                         order,
+                           )
+                       )
+>>>>>>                 order += 1
+>>>>>>             if rows:
+>>>>>>                 start = 0
+>>>>>>                 first_period = int(RUYIMUTAN_HISTORY_ROW_RE.match(rows[0].line).group(1))
+>>>>>>                 for index in range(1, len(rows)):
+>>>>>>                     current_period = int(RUYIMUTAN_HISTORY_ROW_RE.match(rows[index].line).group(1))
+>>>>>>                     previous_period = int(RUYIMUTAN_HISTORY_ROW_RE.match(rows[index - 1].line).group(1))
+>>>>>>                     if current_period != first_period or previous_period != first_period - 1:
+>>>>>>                         continue
+>>>>>>                     blocks.append(rows[start:index])
+>>>>>>                     start = index
+>>>>>>                     first_period = current_period
+>>>>>>                 if start < len(rows):
+>>>>>>                     blocks.append(rows[start:])
+>>>>>>     return blocks
+       
+       
+    5: def find_ruyimutan_kill_sum_candidate_with_direction(
+    3:     documents: list[str], period: int, pick: str
+    1: ) -> tuple[Candidate | None, bool, list[int]]:
+>>>>>>     blocks = ruyimutan_author_content_blocks(documents)
+>>>>>>     if not blocks:
+>>>>>>         return None, False, []
+>>>>>>     current_block = directional_window(blocks, pick, 1)[0]
+>>>>>>     directional_rows = directional_window(current_block, pick, 1)
+>>>>>>     window_periods = [
+>>>>>>         int(RUYIMUTAN_HISTORY_ROW_RE.match(row.line).group(1))
+>>>>>>         for row in directional_rows
+           ]
+>>>>>>     matches = [
+>>>>>>         row
+>>>>>>         for row in directional_rows
+>>>>>>         if int(RUYIMUTAN_HISTORY_ROW_RE.match(row.line).group(1)) == period
+           ]
+>>>>>>     if matches:
+>>>>>>         return select_dedicated_candidate(matches, pick), False, window_periods
+>>>>>>     outside = any(
+>>>>>>         int(RUYIMUTAN_HISTORY_ROW_RE.match(row.line).group(1)) == period
+>>>>>>         for block in blocks
+>>>>>>         for row in block
+           )
+>>>>>>     return None, outside, window_periods
+       
+       
+    5: def find_ruyimutan_kill_sum_candidate(
+    3:     documents: list[str], period: int, pick: str
+    1: ) -> Candidate | None:
+>>>>>>     candidate, _outside_direction, _window_periods = find_ruyimutan_kill_sum_candidate_with_direction(
+>>>>>>         documents, period, pick
+           )
+>>>>>>     return candidate
+       
+       
+    1: def extract_ruyimutan_kill_sum_period_values(documents: list[str]) -> dict[int, str]:
+>>>>>>     values: dict[int, str] = {}
+>>>>>>     for document in documents:
+>>>>>>         blocks = ruyimutan_author_content_blocks([document])
+>>>>>>         if not blocks:
+>>>>>>             continue
+>>>>>>         block_values: dict[int, str] = {}
+>>>>>>         for row in blocks[-1]:
+>>>>>>             period = int(RUYIMUTAN_HISTORY_ROW_RE.match(row.line).group(1))
+>>>>>>             existing = block_values.get(period)
+>>>>>>             if existing is not None and existing != row.values:
+>>>>>>                 raise DedicatedCandidateConflict([existing, row.values], [row.line])
+>>>>>>             block_values[period] = row.values
+>>>>>>         for period, value in block_values.items():
+>>>>>>             existing = values.get(period)
+>>>>>>             if existing is not None and existing != value:
+>>>>>>                 raise DedicatedCandidateConflict([existing, value], [f"{period}期绝杀一合 ({value})开"])
+>>>>>>             values[period] = value
+>>>>>>     return values
+       
+    1: DEDICATED_SITE_IDS = BATCH_NEW_DEDICATED_SITE_IDS | {
+           "s002_topic_247357",
+           "s029_topic_336887",
+           "s043_topic_252215",
+           "s058_vkjwinyt",
+           "s059_topic_324760",
+           "s060_topic_589491",
+           "s069_topic_682018",
+           "s070_topic_246762",
+           "s071_topic_768615",
+           "s073_shuqhbq",
+           "s077_topic_233118",
+           "s083_topic_242261",
+           "s085_kcvpleh",
+           "s091_2_www39169b_gsbl_s01",
+           "s092_a_995546_gsb_aspx_id_amjyb036",
+           "s093_a_909922_article_aspx_id_3694545",
+           "s094_topic_727508",
+           "s095_kk_212557a_art_zhuanqu_8149",
+           "s096_topic_206671",
+           "s099_topic_464275",
+       }
+    2: DEDICATED_WINDOW_VALUE_RE = re.compile(
+    1:     r"[\[【\(（]\s*(?:合\s*)?(0?[1-9]|1[0-3])\s*(?:合)?\s*[\]】\)）].{0,30}?[开開]"
+       )
+    2: ABBREVIATED_KILL_ROW_RE = re.compile(
+    1:     r"(?<!\d)(\d{1,4})\s*期\s*[:：]?\s*杀\s*[:：]?\s*"
+           r"[\[【\(（][^期]{0,20}?(0?[1-9]|1[0-3])\s*合[^期]{0,12}?[\]】\)）][^期]{0,20}?[开開]",
+    1:     re.I,
+       )
+       
+       
+    1: def build_dedicated_window_parts(documents: list[str], allow_weak: bool) -> list[tuple[str, bool]]:
+>>>>>>     parts = build_latest_candidate_parts(documents, allow_weak)
+>>>>>>     seen = {normalize_digit_text(normalize_text(line)) for line, _ in parts}
+>>>>>>     seen_keys = {
+>>>>>>         key
+>>>>>>         for line, _ in parts
+>>>>>>         for key in [candidate_window_key(line, allow_weak)]
+>>>>>>         if key is not None
+           }
+>>>>>>     for document in documents:
+>>>>>>         lines = document_text_lines(document)
+>>>>>>         text = normalize_digit_text(normalize_text(BeautifulSoup(document, "html.parser").get_text(" ", strip=True) or document))
+>>>>>>         document_has_strict_header = has_kill_sum_keyword(text, allow_weak)
+>>>>>>         for line in lines + split_all_period_segments(text):
+>>>>>>             normalized = normalize_digit_text(normalize_text(line))
+>>>>>>             if normalized in seen:
+>>>>>>                 continue
+>>>>>>             abbreviated = ABBREVIATED_KILL_ROW_RE.search(normalized) if document_has_strict_header else None
+>>>>>>             if not has_kill_sum_keyword(normalized, allow_weak) and abbreviated is None:
+>>>>>>                 continue
+>>>>>>             periods = period_numbers_in_text(normalized)
+>>>>>>             value_match = DEDICATED_WINDOW_VALUE_RE.search(normalized)
+>>>>>>             if len(periods) != 1 or (value_match is None and abbreviated is None):
+>>>>>>                 continue
+>>>>>>             value = f"{int(abbreviated.group(2) if abbreviated is not None else value_match.group(1)):02d}合"
+>>>>>>             key = (periods[0], value)
+>>>>>>             if key in seen_keys:
+>>>>>>                 continue
+>>>>>>             canonical = f"{periods[0]}期 绝杀一合 [{value}] 开"
+>>>>>>             parts.append((canonical, has_body_locator(text) or has_body_locator(normalized)))
+>>>>>>             seen.add(normalized)
+>>>>>>             seen_keys.add(key)
+>>>>>>     return parts
+       
+       
+    5: def dedicated_directional_window_failure(
+    1:     site: Site,
+    1:     period: int,
+    1:     documents: list[str],
+    1: ) -> tuple[str | None, str, list[str], str | None] | None:
+>>>>>>     if site.site_id not in DEDICATED_SITE_IDS:
+>>>>>>         return None
+>>>>>>     allow_weak = site_rule(site).allow_weak_kill_sum_keyword
+>>>>>>     parts = build_dedicated_window_parts(documents, allow_weak)
+>>>>>>     record_groups: list[list[tuple[str, bool]]] = []
+>>>>>>     for part in parts:
+>>>>>>         key = candidate_window_key(part[0], allow_weak)
+>>>>>>         if key is None:
+>>>>>>             continue
+>>>>>>         if not record_groups:
+>>>>>>             record_groups.append([part])
+>>>>>>             continue
+>>>>>>         previous_key = candidate_window_key(record_groups[-1][0][0], allow_weak)
+>>>>>>         if previous_key is None or previous_key[0] != key[0]:
+>>>>>>             record_groups.append([part])
+               else:
+>>>>>>             record_groups[-1].append(part)
+       
+>>>>>>     target_groups = [
+>>>>>>         group
+>>>>>>         for group in record_groups
+>>>>>>         if (candidate_window_key(group[0][0], allow_weak) or (None, None))[0] == period
+           ]
+>>>>>>     if not target_groups:
+>>>>>>         return None
+>>>>>>     selected_groups = directional_window(record_groups, site.pick, 1)
+>>>>>>     selected_target_groups = [group for group in selected_groups if group in target_groups]
+>>>>>>     if selected_target_groups:
+>>>>>>         return None
+>>>>>>     return (
+>>>>>>         None,
+>>>>>>         f"{site.name} {period}期不是{directional_three_label(site.pick)}专属历史边界行",
+>>>>>>         [],
+>>>>>>         "方向范围外",
+           )
+       
+       
+    7: def find_batch_new_site_kill_sum_candidate(
+    1:     documents: list[str],
+    1:     period: int,
+    1:     pick: str,
+    2:     detect_conflict: bool = True,
+    2:     allow_weak: bool = False,
+    1: ) -> Candidate | None:
+>>>>>>     record_groups: list[list[tuple[int, str, str]]] = []
+>>>>>>     for line, _has_locator in build_dedicated_window_parts(documents, allow_weak=allow_weak):
+>>>>>>         key = candidate_window_key(line, allow_weak)
+>>>>>>         if key is None:
+>>>>>>             continue
+>>>>>>         row_period, value = key
+>>>>>>         if not record_groups or record_groups[-1][0][0] != row_period:
+>>>>>>             record_groups.append([])
+>>>>>>         if not any(existing_value == value and existing_line == line for _, existing_value, existing_line in record_groups[-1]):
+>>>>>>             record_groups[-1].append((row_period, value, line))
+       
+>>>>>>     selected_groups = directional_window(record_groups, pick, 1)
+>>>>>>     matches: list[Candidate] = []
+>>>>>>     order = 0
+>>>>>>     for group in selected_groups:
+>>>>>>         for row_period, value, line in directional_window(group, pick, 1):
+>>>>>>             if row_period != period:
+>>>>>>                 continue
+>>>>>>             matches.append(Candidate(value, line, score_candidate(line, [value]), order))
+>>>>>>             order += 1
+>>>>>>     return select_dedicated_candidate(matches, pick, detect_conflict=False)
+       
+       
+    2: STRICT_CYCLE_ROW_RE = re.compile(
+    1:     r"(?<!\d)(\d{1,4})\s*期\s*[:：]?\s*"
+           r"(?:[\[【]\s*)?绝\s*杀\s*一\s*合(?:\s*[\]】])?\s*[:：]?\s*"
+           r"[\[【\(（]\s*(0?[1-9]|1[0-3])\s*(?:合)?\s*[\]】\)）]\s*[开開]",
+    1:     re.I,
+       )
+       
+       
+    1: def _strict_kill_sum_cycles(documents: list[str], anchor: str | None = None) -> list[list[Candidate]]:
+>>>>>>     groups: list[list[Candidate]] = []
+>>>>>>     signatures: set[tuple[tuple[int, str], ...]] = set()
+>>>>>>     order = 0
+>>>>>>     normalized_anchor = normalize_digit_text(normalize_text(anchor or ""))
+       
+>>>>>>     for document in documents:
+>>>>>>         text = normalize_digit_text(
+>>>>>>             normalize_text(BeautifulSoup(document, "html.parser").get_text(" ", strip=True) or document)
+               )
+>>>>>>         if normalized_anchor and normalized_anchor not in text:
+>>>>>>             continue
+       
+>>>>>>         document_groups: list[list[tuple[int, Candidate]]] = []
+>>>>>>         current: list[tuple[int, Candidate]] = []
+>>>>>>         direction = 0
+>>>>>>         previous_period: int | None = None
+>>>>>>         for match in STRICT_CYCLE_ROW_RE.finditer(text):
+>>>>>>             row_period = int(match.group(1))
+>>>>>>             value = f"{int(match.group(2)):02d}合"
+>>>>>>             delta = 0 if previous_period is None else row_period - previous_period
+>>>>>>             delta_direction = 1 if delta > 0 else -1 if delta < 0 else 0
+>>>>>>             starts_new_cycle = direction != 0 and delta_direction != 0 and delta_direction != direction
+>>>>>>             if starts_new_cycle and current:
+>>>>>>                 document_groups.append(current)
+>>>>>>                 current = []
+>>>>>>                 direction = 0
+>>>>>>                 previous_period = None
+       
+>>>>>>             line = normalize_text(match.group(0))
+>>>>>>             current.append(
+>>>>>>                 (row_period, Candidate(value, line, score_candidate(line, [value]), order))
+                   )
+>>>>>>             order += 1
+>>>>>>             if previous_period is not None and direction == 0:
+>>>>>>                 direction = 1 if row_period > previous_period else -1 if row_period < previous_period else 0
+>>>>>>             previous_period = row_period
+>>>>>>         if current:
+>>>>>>             document_groups.append(current)
+       
+>>>>>>         for group in document_groups:
+>>>>>>             signature = tuple((row_period, candidate.values) for row_period, candidate in group)
+>>>>>>             if not signature or signature in signatures:
+>>>>>>                 continue
+>>>>>>             signatures.add(signature)
+>>>>>>             groups.append([candidate for _row_period, candidate in group])
+>>>>>>     return groups
+       
+       
+    6: def find_directional_cycle_kill_sum_candidate(
+    1:     documents: list[str],
+    1:     period: int,
+    1:     pick: str,
+    2:     anchor: str | None = None,
+    1: ) -> tuple[Candidate | None, bool]:
+>>>>>>     groups = _strict_kill_sum_cycles(documents, anchor)
+>>>>>>     if not groups:
+>>>>>>         return None, False
+       
+>>>>>>     normalized_pick = normalize_pick(pick)
+>>>>>>     selected = directional_window(groups, normalized_pick, 1)[0]
+>>>>>>     window = directional_window(selected, normalized_pick, 1)
+>>>>>>     period_re = re.compile(rf"(?<!\d){re.escape(str(period))}\s*期")
+>>>>>>     matches = [candidate for candidate in window if period_re.search(candidate.line)]
+>>>>>>     if matches:
+>>>>>>         return select_dedicated_candidate(matches, pick, detect_conflict=True), False
+       
+>>>>>>     outside = any(
+>>>>>>         period_re.search(candidate.line)
+>>>>>>         for group in groups
+>>>>>>         for candidate in group
+           )
+>>>>>>     return None, outside
+       
+       
+    2: SAIMAHUI_HISTORY_ROW_RE = re.compile(
+    1:     r"(?<!\d)(\d{1,4})\s*期\s*[:：]?\s*绝\s*杀\s*一\s*合\s*"
+           r"[\[【]\s*(0?[1-9]|1[0-3])\s*合\s*[\]】]\s*[开開]\s*[:：]?",
+    1:     re.I,
+       )
+       
+       
+    5: def find_saima_archive_kill_sum_candidate(
+    3:     documents: list[str], period: int, pick: str
+    1: ) -> tuple[Candidate | None, bool, bool]:
+>>>>>>     blocks: list[list[Candidate]] = []
+>>>>>>     seen: set[tuple[tuple[int, str], ...]] = set()
+>>>>>>     order = 0
+>>>>>>     for document in documents:
+>>>>>>         soup = BeautifulSoup(document, "html.parser")
+>>>>>>         for archive in soup.select(".box-theme01d"):
+>>>>>>             title = archive.select_one(".title")
+>>>>>>             author = archive.select_one(".topic-author")
+>>>>>>             content = archive.select_one(".topic-content")
+>>>>>>             if title is None or author is None or content is None:
+>>>>>>                 continue
+>>>>>>             title_text = normalize_digit_text(normalize_text(title.get_text(" ", strip=True)))
+>>>>>>             if not re.search(r"(?<!\d)\d{1,4}\s*期.*?绝\s*杀\s*一\s*合", title_text):
+>>>>>>                 continue
+>>>>>>             content_text = normalize_digit_text(normalize_text(content.get_text(" ", strip=True)))
+>>>>>>             rows: list[tuple[int, Candidate]] = []
+>>>>>>             for match in SAIMAHUI_HISTORY_ROW_RE.finditer(content_text):
+>>>>>>                 row_period = int(match.group(1))
+>>>>>>                 value = f"{int(match.group(2)):02d}合"
+>>>>>>                 line = normalize_text(match.group(0))
+>>>>>>                 rows.append((row_period, Candidate(value, line, score_candidate(line, [value]), order)))
+>>>>>>                 order += 1
+>>>>>>             signature = tuple((row_period, candidate.values) for row_period, candidate in rows)
+>>>>>>             if len(rows) < 3 or signature in seen:
+>>>>>>                 continue
+>>>>>>             seen.add(signature)
+>>>>>>             blocks.append([candidate for _row_period, candidate in rows])
+       
+>>>>>>     if not blocks:
+>>>>>>         return None, False, False
+>>>>>>     selected_block = directional_window(blocks, pick, 1)[0]
+>>>>>>     window = directional_window(selected_block, pick, 1)
+>>>>>>     period_re = re.compile(rf"(?<!\d){re.escape(str(period))}\s*期")
+>>>>>>     matches = [candidate for candidate in window if period_re.search(candidate.line)]
+>>>>>>     if matches:
+>>>>>>         return select_dedicated_candidate(matches, pick, detect_conflict=True), False, True
+>>>>>>     outside = any(period_re.search(candidate.line) for block in blocks for candidate in block)
+>>>>>>     return None, outside, True
+       
+       
+    6: def find_named_anchor_history_candidate(
+    1:     documents: list[str],
+    1:     period: int,
+    1:     pick: str,
+    1:     anchor_text: str,
+    1: ) -> Candidate | None:
+>>>>>>     normalized_anchor = normalize_digit_text(normalize_text(anchor_text))
+>>>>>>     anchored_documents: list[str] = []
+>>>>>>     for document in documents:
+>>>>>>         text = normalize_digit_text(
+>>>>>>             normalize_text(BeautifulSoup(document, "html.parser").get_text(" ", strip=True) or document)
+               )
+>>>>>>         if normalized_anchor in text:
+>>>>>>             anchored_documents.append(document)
+>>>>>>     if not anchored_documents:
+>>>>>>         return None
+>>>>>>     return find_batch_new_site_kill_sum_candidate(
+>>>>>>         anchored_documents,
+>>>>>>         period,
+>>>>>>         pick,
+>>>>>>         detect_conflict=False,
+           )
+       
+       
+    1: def find_yizhiluanuyan_kill_sum_candidate(documents: list[str], period: int, pick: str) -> Candidate | None:
+>>>>>>     title_re = re.compile(r"一\s*纸\s*乱\s*言\s*[\[【]?\s*绝\s*杀\s*一\s*合\s*[\]】]?")
+>>>>>>     stop_re = re.compile(r"澳\s*彩\s*合\s*数\s*属\s*性")
+>>>>>>     row_re = re.compile(
+>>>>>>         rf"(?<!\d){re.escape(str(period))}\s*期\s*[:：]?\s*"
+               rf"绝\s*杀\s*一\s*合\s*[\(\[（]\s*(0?[1-9]|1[0-3])\s*合\s*[\)\]）]\s*开"
+           )
+>>>>>>     matches: list[Candidate] = []
+>>>>>>     order = 0
+>>>>>>     for document in documents:
+>>>>>>         lines = document_text_lines(document)
+>>>>>>         in_section = False
+>>>>>>         section_lines: list[str] = []
+>>>>>>         for line in lines:
+>>>>>>             normalized = normalize_digit_text(normalize_text(line))
+>>>>>>             if title_re.search(normalized):
+>>>>>>                 in_section = True
+>>>>>>                 section_lines = []
+>>>>>>                 continue
+>>>>>>             if in_section and stop_re.search(normalized):
+>>>>>>                 in_section = False
+>>>>>>                 section_text = normalize_text(" ".join(section_lines))
+>>>>>>                 for match in row_re.finditer(section_text):
+>>>>>>                     value = f"{int(match.group(1)):02d}合"
+>>>>>>                     line_text = normalize_text(match.group(0))
+>>>>>>                     matches.append(Candidate(value, line_text, score_candidate(line_text, [value]), order))
+>>>>>>                     order += 1
+>>>>>>                 section_lines = []
+>>>>>>                 continue
+>>>>>>             if not in_section:
+>>>>>>                 continue
+>>>>>>             section_lines.append(normalized)
+>>>>>>         if in_section and section_lines:
+>>>>>>             section_text = normalize_text(" ".join(section_lines))
+>>>>>>             for match in row_re.finditer(section_text):
+>>>>>>                 value = f"{int(match.group(1)):02d}合"
+>>>>>>                 line_text = normalize_text(match.group(0))
+>>>>>>                 matches.append(Candidate(value, line_text, score_candidate(line_text, [value]), order))
+>>>>>>                 order += 1
+       
+>>>>>>     if not matches:
+>>>>>>         return None
+>>>>>>     return select_dedicated_candidate(matches, pick)
+       
+       
+    1: def find_huluntunzao_kill_sum_candidate(documents: list[str], period: int, pick: str) -> Candidate | None:
+>>>>>>     title_re = re.compile(r"囫\s*囵\s*吞\s*枣\s*[\[【]?\s*绝\s*杀\s*一\s*合\s*[\]】]?\s*长\s*期\s*发\s*表")
+>>>>>>     stop_re = re.compile(r"看\s*完\s*资\s*料")
+>>>>>>     row_re = re.compile(
+>>>>>>         rf"(?<!\d){re.escape(str(period))}\s*期\s*[:：]?\s*"
+               rf"绝\s*杀\s*一\s*合\s*[\[【]\s*(0?[1-9]|1[0-3])\s*合\s*[\]】]\s*开\s*[:：]?"
+           )
+>>>>>>     matches: list[Candidate] = []
+>>>>>>     order = 0
+>>>>>>     for document in documents:
+>>>>>>         lines = document_text_lines(document)
+>>>>>>         in_section = False
+>>>>>>         section_lines: list[str] = []
+>>>>>>         for line in lines:
+>>>>>>             normalized = normalize_digit_text(normalize_text(line))
+>>>>>>             if title_re.search(normalized):
+>>>>>>                 in_section = True
+>>>>>>                 section_lines = []
+>>>>>>                 continue
+>>>>>>             if in_section and stop_re.search(normalized):
+>>>>>>                 in_section = False
+>>>>>>                 section_text = normalize_text(" ".join(section_lines))
+>>>>>>                 for match in row_re.finditer(section_text):
+>>>>>>                     value = f"{int(match.group(1)):02d}合"
+>>>>>>                     line_text = normalize_text(match.group(0))
+>>>>>>                     matches.append(Candidate(value, line_text, score_candidate(line_text, [value]), order))
+>>>>>>                     order += 1
+>>>>>>                 section_lines = []
+>>>>>>                 continue
+>>>>>>             if not in_section:
+>>>>>>                 continue
+>>>>>>             section_lines.append(normalized)
+>>>>>>         if in_section and section_lines:
+>>>>>>             section_text = normalize_text(" ".join(section_lines))
+>>>>>>             for match in row_re.finditer(section_text):
+>>>>>>                 value = f"{int(match.group(1)):02d}合"
+>>>>>>                 line_text = normalize_text(match.group(0))
+>>>>>>                 matches.append(Candidate(value, line_text, score_candidate(line_text, [value]), order))
+>>>>>>                 order += 1
+       
+>>>>>>     if not matches:
+>>>>>>         return None
+>>>>>>     return select_dedicated_candidate(matches, pick)
+       
+       
+    1: def find_liangjian_kill_sum_candidate(documents: list[str], period: int, pick: str) -> Candidate | None:
+>>>>>>     title_re = re.compile(
+>>>>>>         r"^\d+\s*期\s*[:：]\s*[【\[]?\s*亮\s*[★☆]?\s*劍\s*[★☆]?\s*原\s*创\s*公\s*式\s*[杀殺]\s*合\s*[】\]]?$"
+               r"|^\d+\s*期\s*[:：]\s*赛\s*玛\s*荟\s*独\s*家\s*[\[【]\s*绝\s*杀\s*一\s*合\s*[\]】]\s*$"
+           )
+>>>>>>     stop_re = re.compile(r"上\s*一\s*篇|澳\s*门\s*百\s*彩\s*通\s*[【\[]\s*生\s*肖\s*属\s*性")
+>>>>>>     row_re = re.compile(
+>>>>>>         rf"(?<!\d){re.escape(str(period))}\s*期\s*"
+               rf"(?:[【\[]?\s*亮\s*[★☆]?\s*劍\s*[★☆]?\s*原\s*创\s*公\s*式\s*[杀殺]\s*合\s*[】\]]?\s*[:：]?"
+               rf"|[杀殺]\s*[:：])\s*[【\[]\s*(0?[1-9]|1[0-3])\s*合\s*[】\]]\s*开"
+           )
+>>>>>>     matches: list[Candidate] = []
+>>>>>>     order = 0
+>>>>>>     for document in documents:
+>>>>>>         lines = document_text_lines(document)
+>>>>>>         in_section = False
+>>>>>>         section_lines: list[str] = []
+>>>>>>         for line in lines:
+>>>>>>             normalized = normalize_digit_text(normalize_text(line))
+>>>>>>             if title_re.search(normalized):
+>>>>>>                 in_section = True
+>>>>>>                 section_lines = []
+>>>>>>                 continue
+>>>>>>             if in_section and stop_re.search(normalized):
+>>>>>>                 in_section = False
+>>>>>>                 section_text = normalize_text(" ".join(section_lines))
+>>>>>>                 for match in row_re.finditer(section_text):
+>>>>>>                     value = f"{int(match.group(1)):02d}合"
+>>>>>>                     line_text = normalize_text(match.group(0))
+>>>>>>                     matches.append(Candidate(value, line_text, score_candidate(line_text, [value]), order))
+>>>>>>                     order += 1
+>>>>>>                 section_lines = []
+>>>>>>                 continue
+>>>>>>             if not in_section:
+>>>>>>                 continue
+>>>>>>             section_lines.append(normalized)
+>>>>>>         if in_section and section_lines:
+>>>>>>             section_text = normalize_text(" ".join(section_lines))
+>>>>>>             for match in row_re.finditer(section_text):
+>>>>>>                 value = f"{int(match.group(1)):02d}合"
+>>>>>>                 line_text = normalize_text(match.group(0))
+>>>>>>                 matches.append(Candidate(value, line_text, score_candidate(line_text, [value]), order))
+>>>>>>                 order += 1
+       
+>>>>>>     if not matches:
+>>>>>>         return None
+>>>>>>     return select_dedicated_candidate(matches, pick)
+       
+       
+    1: def find_chunfenghuayu_kill_sum_candidate(documents: list[str], period: int, pick: str) -> Candidate | None:
+>>>>>>     author_re = re.compile(r"春\s*风\s*化\s*雨\s*发\s*表")
+>>>>>>     stop_re = re.compile(r"合\s*数\s*属\s*性|Copyright|版\s*权\s*所\s*有")
+>>>>>>     row_re = re.compile(
+>>>>>>         rf"(?<!\d){re.escape(str(period))}\s*期\s*[:：]?\s*"
+               rf"绝\s*杀\s*一\s*合\s*[\(（]\s*(0?[1-9]|1[0-3])\s*合\s*[\)）]\s*开"
+           )
+>>>>>>     matches: list[Candidate] = []
+>>>>>>     order = 0
+>>>>>>     for document in documents:
+>>>>>>         lines = [normalize_digit_text(normalize_text(line)) for line in document_text_lines(document)]
+>>>>>>         in_section = False
+>>>>>>         section_lines: list[str] = []
+>>>>>>         for line in lines:
+>>>>>>             if author_re.search(line):
+>>>>>>                 in_section = True
+>>>>>>                 section_lines = []
+>>>>>>                 continue
+>>>>>>             if in_section and stop_re.search(line):
+>>>>>>                 break
+>>>>>>             if not in_section:
+>>>>>>                 continue
+>>>>>>             section_lines.append(line)
+>>>>>>         if section_lines:
+>>>>>>             section_text = normalize_text(" ".join(section_lines))
+>>>>>>             for match in row_re.finditer(section_text):
+>>>>>>                 value = f"{int(match.group(1)):02d}合"
+>>>>>>                 line_text = normalize_text(match.group(0))
+>>>>>>                 matches.append(Candidate(value, line_text, score_candidate(line_text, [value]), order))
+>>>>>>                 order += 1
+       
+>>>>>>     if not matches:
+>>>>>>         return None
+>>>>>>     return select_dedicated_candidate(matches, pick)
+       
+       
+    5: def find_xianrenzhilu_kill_sum_candidate(
+    4:     documents: list[str], period: int, pick: str = "top"
+    1: ) -> Candidate | None:
+>>>>>>     title_re = re.compile(r"(?<!\d)\d{1,4}\s*期\s*[:：]\s*仙\s*人\s*指\s*路.*绝\s*杀\s*一\s*合")
+>>>>>>     row_re = re.compile(
+>>>>>>         r"(?<!\d)(\d{1,4})\s*期\s*[:：]\s*绝\s*杀\s*一\s*合\s*"
+               r"[\[【]\s*(0?[1-9]|1[0-3])\s*合\s*[\]】]\s*[开開]"
+           )
+>>>>>>     blocks: list[list[tuple[int, Candidate]]] = []
+>>>>>>     order = 0
+>>>>>>     for document in documents:
+>>>>>>         lines = [normalize_digit_text(normalize_text(line)) for line in document_text_lines(document)]
+>>>>>>         for index, line in enumerate(lines):
+>>>>>>             if not title_re.search(line):
+>>>>>>                 continue
+>>>>>>             section = normalize_text(" ".join(lines[index + 1:]))
+>>>>>>             rows: list[tuple[int, Candidate]] = []
+>>>>>>             for match in row_re.finditer(section):
+>>>>>>                 row_period = int(match.group(1))
+>>>>>>                 value = f"{int(match.group(2)):02d}合"
+>>>>>>                 rows.append(
+>>>>>>                     (
+>>>>>>                         row_period,
+>>>>>>                         Candidate(value, normalize_text(match.group(0)), score_candidate(match.group(0), [value]), order),
+                           )
+                       )
+>>>>>>                 order += 1
+>>>>>>             if rows:
+>>>>>>                 blocks.append(rows)
+>>>>>>     selected_blocks = directional_window(blocks, pick, 1)
+>>>>>>     matches = [
+>>>>>>         candidate
+>>>>>>         for block in selected_blocks
+>>>>>>         for row_period, candidate in directional_window(block, pick, 1)
+>>>>>>         if row_period == period
+           ]
+>>>>>>     return select_dedicated_candidate(matches, pick)
+       
+       
+    5: def find_baxianguohai_kill_sum_candidate(
+    4:     documents: list[str], period: int, pick: str = "bottom"
+    1: ) -> Candidate | None:
+>>>>>>     anchor_re = re.compile(r"八\s*仙\s*过\s*海")
+>>>>>>     end_re = re.compile(r"澳门六合彩合数属性")
+>>>>>>     row_re = re.compile(
+>>>>>>         r"(?<!\d)(\d{1,4})\s*期\s*[:：]\s*绝\s*杀\s*一\s*合\s*"
+               r"[\[【]\s*(0?[1-9]|1[0-3])\s*合\s*[\]】]\s*[开開]"
+           )
+>>>>>>     blocks: list[list[tuple[int, Candidate]]] = []
+>>>>>>     order = 0
+>>>>>>     for document in documents:
+>>>>>>         lines = [normalize_digit_text(normalize_text(line)) for line in document_text_lines(document)]
+>>>>>>         in_block = False
+>>>>>>         block_lines: list[str] = []
+>>>>>>         for line in lines:
+>>>>>>             if anchor_re.search(line):
+>>>>>>                 in_block = True
+>>>>>>                 continue
+>>>>>>             if not in_block:
+>>>>>>                 continue
+>>>>>>             if end_re.search(line):
+>>>>>>                 break
+>>>>>>             block_lines.append(line)
+>>>>>>         block = normalize_text(" ".join(block_lines))
+>>>>>>         rows: list[tuple[int, Candidate]] = []
+>>>>>>         for match in row_re.finditer(block):
+>>>>>>             row_period = int(match.group(1))
+>>>>>>             value = f"{int(match.group(2)):02d}合"
+>>>>>>             rows.append(
+>>>>>>                 (
+>>>>>>                     row_period,
+>>>>>>                     Candidate(value, normalize_text(match.group(0)), score_candidate(match.group(0), [value]), order),
+                       )
+                   )
+>>>>>>             order += 1
+>>>>>>         if rows:
+>>>>>>             blocks.append(rows)
+>>>>>>     selected_blocks = directional_window(blocks, pick, 1)
+>>>>>>     matches = [
+>>>>>>         candidate
+>>>>>>         for block in selected_blocks
+>>>>>>         for row_period, candidate in directional_window(block, pick, 1)
+>>>>>>         if row_period == period
+           ]
+>>>>>>     return select_dedicated_candidate(matches, pick)
+       
+       
+    5: def find_anchor_latest_candidate(
+    1:     site: Site,
+    1:     documents: list[str],
+    1:     period: int,
+    1: ) -> tuple[Candidate | None, str | None, str | None]:
+>>>>>>     rule = site_rule(site)
+>>>>>>     pick = normalize_pick(rule.anchor_pick or site.pick)
+>>>>>>     if not rule.anchor_text or not rule.latest_after_anchor:
+>>>>>>         return None, None, None
+       
+>>>>>>     anchor_text = normalize_digit_text(normalize_text(rule.anchor_text))
+>>>>>>     strict_author_block = site.site_id in {
+               "s004_topic_225401",
+               "s031_topic_437742",
+           }
+>>>>>>     strict_published_block = site.site_id == "s039_topic_455521"
+>>>>>>     author_prefix_re = re.compile(r"^作者\s*[:：]")
+>>>>>>     author_inline_re = re.compile(r"作者\s*[:：]")
+>>>>>>     target_author_re = re.compile(rf"^作者\s*[:：]\s*{re.escape(anchor_text)}(?:\s|$)")
+>>>>>>     published_prefix_re = re.compile(r"^.{1,60}\s+发表于(?:\s|$)")
+>>>>>>     published_inline_re = re.compile(r"[\u4e00-\u9fffA-Za-z0-9_]{1,20}\s+发表于(?:\s|$)")
+>>>>>>     target_published_re = re.compile(rf"^{re.escape(anchor_text)}\s+发表于(?:\s|$)")
+>>>>>>     found_anchor = False
+>>>>>>     anchor_blocks: list[str] = []
+>>>>>>     for document in documents:
+>>>>>>         lines = document_text_lines(document)
+>>>>>>         normalized_lines = [normalize_digit_text(normalize_text(line)) for line in lines]
+>>>>>>         for index, line in enumerate(normalized_lines):
+>>>>>>             anchor_match = None
+>>>>>>             if strict_author_block:
+>>>>>>                 anchor_match = target_author_re.search(line)
+>>>>>>                 if anchor_match is None:
+>>>>>>                     continue
+>>>>>>             elif strict_published_block:
+>>>>>>                 anchor_match = target_published_re.search(line)
+>>>>>>                 if anchor_match is None:
+>>>>>>                     continue
+>>>>>>             elif anchor_text not in line:
+>>>>>>                 continue
+>>>>>>             found_anchor = True
+       
+>>>>>>             next_anchor_index = next(
+>>>>>>                 (
+>>>>>>                     next_index
+>>>>>>                     for next_index in range(index + 1, len(normalized_lines))
+                           if (
+>>>>>>                         author_prefix_re.search(normalized_lines[next_index]) is not None
+>>>>>>                         if strict_author_block
+>>>>>>                         else published_prefix_re.search(normalized_lines[next_index]) is not None
+>>>>>>                         if strict_published_block
+>>>>>>                         else anchor_text in normalized_lines[next_index]
+                           )
+                       ),
+>>>>>>                 len(lines),
+                   )
+>>>>>>             block_lines: list[str] = []
+>>>>>>             if anchor_match is not None:
+>>>>>>                 trailing_text = normalize_text(line[anchor_match.end() :])
+>>>>>>                 if strict_author_block:
+>>>>>>                     inline_boundary = author_inline_re.search(trailing_text)
+>>>>>>                 elif strict_published_block:
+>>>>>>                     inline_boundary = published_inline_re.search(trailing_text)
+                       else:
+>>>>>>                     inline_boundary = None
+>>>>>>                 if inline_boundary is not None:
+>>>>>>                     trailing_text = normalize_text(trailing_text[: inline_boundary.start()])
+>>>>>>                 if trailing_text:
+>>>>>>                     block_lines.append(trailing_text)
+>>>>>>             block_lines.extend(lines[index + 1 : next_anchor_index])
+>>>>>>             anchor_blocks.append("\n".join(block_lines))
+       
+>>>>>>     if anchor_blocks:
+>>>>>>         candidate, conflict_values, conflict_lines = trusted_candidate_with_conflict(
+>>>>>>             anchor_blocks,
+>>>>>>             period,
+>>>>>>             pick,
+>>>>>>             require_body_locator=False,
+>>>>>>             allow_weak=rule.allow_weak_kill_sum_keyword,
+               )
+>>>>>>         if conflict_values:
+>>>>>>             return (
+>>>>>>                 None,
+>>>>>>                 "候选冲突",
+>>>>>>                 f"{site.name} {period}期作者块方向范围内多个严格候选结果冲突: "
+>>>>>>                 f"{' / '.join(conflict_values)}；候选: {' | '.join(conflict_lines[:5])}",
+                   )
+>>>>>>         if candidate is not None:
+>>>>>>             return candidate, None, None
+>>>>>>         if current_candidates_outside_window(
+>>>>>>             anchor_blocks,
+>>>>>>             period,
+>>>>>>             pick,
+>>>>>>             require_body_locator=False,
+>>>>>>             allow_weak=rule.allow_weak_kill_sum_keyword,
+               ):
+>>>>>>             return None, "超出范围", f"{site.name} 作者块下{period}期严格候选不是{directional_three_label(pick)}高可信候选边界"
+>>>>>>         return None, "未找到目标", f"{site.name} 作者块下没找到{period}期严格杀合数据"
+       
+>>>>>>     if found_anchor:
+>>>>>>         return None, "未找到目标", f"{site.name} 作者块下没找到杀合数据行"
+>>>>>>     return None, "未找到目标", f"{site.name} 没找到作者锚点: {rule.anchor_text}"
+       
+       
+       
+  152: __all__ = [name for name, value in globals().items() if callable(value) and getattr(value, "__module__", None) == __name__]

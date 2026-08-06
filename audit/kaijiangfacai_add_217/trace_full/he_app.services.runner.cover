@@ -1,0 +1,203 @@
+    1: import argparse
+    1: import sys
+    1: import time
+    1: import warnings
+    1: from concurrent.futures import ThreadPoolExecutor, as_completed
+    1: from pathlib import Path
+    1: from threading import Lock
+       
+    1: import requests
+    1: from requests.packages.urllib3.exceptions import InsecureRequestWarning
+       
+    1: from he_app.config.settings import (
+           CACHE_FILE,
+           DEFAULT_DUPLICATE_FINGERPRINT_CACHE,
+           DEFAULT_FAILURE_OUTPUT_DIR,
+           DEFAULT_OUTPUT_DIR,
+           SITES_FILE,
+       )
+    1: from he_app.config.sites import load_sites
+    1: from he_app.domain.models import Site
+    1: from he_app.fetch.browser import BrowserPool, default_browser_pool_size
+    1: from he_app.fetch.http import build_host_locks
+    1: from he_app.observability.progress import (
+           build_slow_site_lines,
+           format_completion_progress,
+           format_progress_prefix,
+       )
+    1: from he_app.services.crawler import build_mirror_url_map, print_outcome, scrape_parallel_site
+    1: from he_app.storage.atomic_write import commit_text_transaction_unlocked, exclusive_path_lock
+    1: from he_app.storage.recent_cache import (
+           update_recent_cache_from_outcomes,
+       )
+    1: from he_app.storage.reports import build_current_only_results, build_success_output_lines, format_failure_output
+       
+       
+    1: def build_arg_parser() -> argparse.ArgumentParser:
+    1:     parser = argparse.ArgumentParser(description="抓取绝杀一合的合数，并分别输出成功和失败 txt。")
+    1:     parser.add_argument("--period", type=int, default=125, help="要抓取的期数，例如 120")
+    1:     parser.add_argument("--success", default=None, help="成功结果文件，默认按期数生成")
+    1:     parser.add_argument("--fail", default=None, help="失败结果文件，默认按期数生成")
+    1:     parser.add_argument("--timeout", type=int, default=20, help="单个请求超时秒数")
+    1:     parser.add_argument("--workers", type=int, default=8, help="全部站点并发数量，默认 8")
+    1:     parser.add_argument("--retries", type=int, default=0, help="兼容旧命令；每个站点始终只抓一次")
+    1:     parser.add_argument("--delay", type=float, default=0.0, help="提交站点任务之间的间隔秒数")
+    1:     parser.add_argument("--show-browser", action="store_true", help="显示二次点击站点的浏览器窗口")
+    1:     parser.add_argument("--cache", default=CACHE_FILE, help=argparse.SUPPRESS)
+    1:     parser.add_argument("--mirror-limit", type=int, default=0, help="原地址请求失败时尝试的备用镜像数量")
+    1:     parser.add_argument("--sites", default=SITES_FILE, help="站点配置 JSON，默认 sites.json")
+    1:     parser.add_argument("--cache-max-age-hours", type=float, default=24.0, help=argparse.SUPPRESS)
+    1:     parser.add_argument("--fingerprint-cache", default=DEFAULT_DUPLICATE_FINGERPRINT_CACHE, help=argparse.SUPPRESS)
+    1:     parser.add_argument("--no-fingerprint-cache-sync", action="store_true", help=argparse.SUPPRESS)
+    2:     parser.add_argument(
+    1:         "--preserve-unconfigured-cache-sites",
+    1:         action="store_true",
+    1:         help="局部同步时显式保留指纹缓存中未包含在本次站点配置里的旧站",
+           )
+    1:     return parser
+       
+       
+    1: def consume_site_future(future, site: Site, fallback_index: int):
+    3:     try:
+    3:         return future.result()
+    1:     except Exception as exc:
+    1:         return fallback_index, site, None, "", f"{type(exc).__name__}: {exc}", [], None, 0.0
+       
+       
+    1: def run(args: argparse.Namespace) -> int:
+    2:     success_output_dir = Path(DEFAULT_OUTPUT_DIR)
+    2:     failure_output_dir = Path(DEFAULT_FAILURE_OUTPUT_DIR)
+    2:     success_path = (
+    2:         Path(args.success).resolve()
+    2:         if args.success
+>>>>>>         else (success_output_dir / f"{args.period}期-合.txt").resolve()
+           )
+    2:     fail_path = (
+    2:         Path(args.fail).resolve()
+    2:         if args.fail
+>>>>>>         else (failure_output_dir / f"{args.period}期-合-失败.txt").resolve()
+           )
+    2:     sites_path = Path(args.sites).resolve()
+    2:     sites = load_sites(sites_path)
+    2:     outcomes: dict[int, tuple[Site, str | None, str, str | None, list[str], str | None]] = {}
+    2:     all_sites = list(enumerate(sites))
+    2:     mirror_url_map = build_mirror_url_map(sites, max(0, args.mirror_limit))
+    2:     host_locks = build_host_locks(sites, mirror_url_map)
+    2:     workers = max(1, args.workers)
+    2:     fingerprint_cache_path = Path(args.fingerprint_cache).resolve()
+       
+   18:     def run_timed_parallel_site(
+    2:         index: int,
+    2:         site: Site,
+    2:         period: int,
+    2:         timeout: int,
+    2:         show_browser: bool,
+    2:         mirror_urls: list[str],
+    2:         locks: dict[str, Lock],
+    2:         pool: BrowserPool | None,
+           ):
+    2:         started_at = time.perf_counter()
+    4:         outcome = scrape_parallel_site(
+    2:             index,
+    2:             site,
+    2:             period,
+    2:             timeout,
+    2:             show_browser,
+    2:             mirror_urls=mirror_urls,
+    2:             host_locks=locks,
+    2:             browser_pool=pool,
+               )
+    2:         return (*outcome, time.perf_counter() - started_at)
+       
+    2:     print(f"[INFO] 全部站点并发抓取: {len(all_sites)} 个，workers={workers}")
+    2:     completed_count = success_count = fail_count = 0
+    2:     site_timings: list[tuple[str, float, bool]] = []
+    2:     browser_pool_size = default_browser_pool_size(sites, workers)
+    2:     browser_pool = BrowserPool(browser_pool_size, headless=not args.show_browser) if browser_pool_size else None
+    2:     if browser_pool is not None:
+>>>>>>         browser_pool.start()
+    2:     try:
+    4:         with ThreadPoolExecutor(max_workers=workers) as executor:
+    2:             future_map = {}
+    2:             total_sites = len(all_sites)
+    4:             for index, site in all_sites:
+    2:                 print(f"{format_progress_prefix(index, total_sites)} [START] {site.name} ({site.pick})")
+    4:                 future = executor.submit(
+    2:                     run_timed_parallel_site,
+    2:                     index,
+    2:                     site,
+    2:                     args.period,
+    2:                     args.timeout,
+    2:                     args.show_browser,
+    2:                     mirror_url_map.get(index, []),
+    2:                     host_locks,
+    2:                     browser_pool,
+                       )
+    2:                 future_map[future] = (index, site)
+    2:                 if args.delay > 0:
+>>>>>>                     time.sleep(args.delay)
+       
+    4:             for future in as_completed(future_map):
+    2:                 fallback_index, fallback_site = future_map[future]
+    4:                 index, site, result, detail, error, rank_values, previous_reason, elapsed = consume_site_future(
+    2:                     future, fallback_site, fallback_index
+                       )
+    2:                 outcome = (site, result, detail, error, rank_values, previous_reason)
+    2:                 site, result, detail, error, rank_values, previous_reason = outcome
+    2:                 outcomes[index] = outcome
+    2:                 completed_count += 1
+    2:                 success_count += int(bool(result))
+    2:                 fail_count += int(not result)
+    2:                 site_timings.append((site.name, elapsed, bool(result)))
+    2:                 print_outcome(site, result, detail, error, format_progress_prefix(index, total_sites))
+    2:                 print(format_completion_progress(completed_count, total_sites, success_count, fail_count, site.name, elapsed))
+           finally:
+    2:         if browser_pool is not None:
+>>>>>>             browser_pool.close()
+       
+    8:     for line in build_slow_site_lines(site_timings):
+    6:         print(line)
+       
+    4:     with exclusive_path_lock(success_path):
+    4:         success_lines, fail_lines, ranking_values, failure_categories = build_current_only_results(
+    2:             sites, outcomes, args.period
+               )
+    2:         success_output = build_success_output_lines(success_lines, ranking_values)
+    2:         success_text = "\n".join(success_output) + ("\n" if success_output else "")
+    2:         failure_output = format_failure_output(fail_lines, failure_categories)
+    2:         changes: dict[Path, tuple[str, str] | None] = {
+    2:             success_path: (success_text, "utf-8-sig"),
+    2:             fail_path: (failure_output, "utf-8-sig") if failure_output else None,
+               }
+    2:         commit_text_transaction_unlocked(changes)
+       
+    2:     cache_update_error: Exception | None = None
+    2:     if not args.no_fingerprint_cache_sync:
+    2:         try:
+    4:             update_recent_cache_from_outcomes(
+    2:                 fingerprint_cache_path,
+    2:                 sites,
+    2:                 outcomes,
+    2:                 args.period,
+    2:                 10,
+    2:                 args.preserve_unconfigured_cache_sites,
+                   )
+    1:         except Exception as exc:
+    1:             cache_update_error = exc
+    1:             print(f"[ERROR] 缓存更新未完成: {type(exc).__name__}: {exc}", file=sys.stderr)
+       
+    2:     print(f"\n成功 {len(success_lines)} 个，保存到: {success_path}")
+    2:     print(f"失败 {len(fail_lines)} 个，保存到: {fail_path}" if fail_lines else "失败 0 个，未生成失败文件")
+    2:     print(f"站点配置: {sites_path}")
+    2:     if cache_update_error is not None:
+    1:         return 1
+    1:     if not args.no_fingerprint_cache_sync:
+    1:         print(f"重复检测指纹备份已同步: {fingerprint_cache_path}")
+    1:     return 0
+       
+       
+    1: def main() -> None:
+>>>>>>     sys.stdout.reconfigure(encoding="utf-8")
+>>>>>>     warnings.simplefilter("ignore", InsecureRequestWarning)
+>>>>>>     requests.packages.urllib3.disable_warnings()
+>>>>>>     raise SystemExit(run(build_arg_parser().parse_args()))

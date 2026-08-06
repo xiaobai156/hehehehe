@@ -1,0 +1,80 @@
+    1: import re
+    1: from collections import Counter
+       
+    1: from he_app.domain.models import Site
+    1: from he_app.parsers.common import classify_failure, format_failure_result
+    1: from he_app.validation.period import is_valid_sum_value
+       
+       
+    1: Outcome = tuple[Site, str | None, str, str | None, list[str], str | None]
+       
+       
+    1: def extract_current_values_from_success(result: str) -> list[str]:
+    9:     current_part = result.split(maxsplit=1)[0]
+   27:     return [value for value in re.findall(r"(?:0[1-9]|1[0-3])合", current_part) if is_valid_sum_value(value)]
+       
+       
+    1: def build_ranking_lines(ranking_values: list[str], title: str = "合数排行") -> list[str]:
+    4:     counts = Counter(ranking_values)
+    4:     if not counts:
+>>>>>>         return ["", title, "无"]
+   13:     ranking = sorted(counts.items(), key=lambda item: (-item[1], int(item[0][:2])))
+   17:     return ["", title, *[f"{rank}. {value} {count}次" for rank, (value, count) in enumerate(ranking, 1)]]
+       
+       
+    1: def build_previous_fail_stats(reasons: list[str]) -> list[str]:
+>>>>>>     counts = Counter(reasons)
+>>>>>>     lines = ["", "前一期失败统计"]
+>>>>>>     if not counts:
+>>>>>>         return [*lines, "无"]
+>>>>>>     order = ["前一期错", "前一期没找到", "前一期没开奖号", "前一期没对错"]
+>>>>>>     lines.extend(f"{reason} {counts[reason]}次" for reason in order if counts.get(reason))
+>>>>>>     lines.extend(f"{reason} {count}次" for reason, count in sorted(counts.items()) if reason not in order)
+>>>>>>     return lines
+       
+       
+    1: def build_success_output_lines(success_lines: list[str], current_ranking_values: list[str]) -> list[str]:
+    4:     return success_lines + build_ranking_lines(current_ranking_values, "当前合数排行")
+       
+       
+    6: def build_current_only_results(
+    1:     sites: list[Site],
+    1:     outcomes: dict[int, Outcome],
+    1:     period: int,
+    2:     existing_success: dict[str, str] | None = None,
+    1: ) -> tuple[list[str], list[str], list[str], list[str]]:
+    4:     success_lines: list[str] = []
+    4:     fail_lines: list[str] = []
+    4:     failure_categories: list[str] = []
+    4:     ranking_values: list[str] = []
+   15:     for index, site in enumerate(sites):
+   22:         _site, result, detail, error, _rank_values, failure_category = outcomes.get(
+   11:             index, (site, None, "", "未执行", [], None)
+               )
+   11:         if result:
+    9:             success_lines.append(result)
+    9:             ranking_values.extend(extract_current_values_from_success(result))
+               else:
+    2:             fail_lines.append(format_failure_result(period, site, detail, error, failure_category))
+    2:             category = failure_category if failure_category and not error else classify_failure(period, detail, error).category
+    2:             failure_categories.append(category)
+    4:     return success_lines, fail_lines, ranking_values, failure_categories
+       
+       
+    1: def build_failure_stats_lines(failure_categories: list[str]) -> list[str]:
+    2:     if not failure_categories:
+>>>>>>         return []
+    2:     counts = Counter(failure_categories)
+    2:     lines = ["失败分类统计"]
+   10:     lines.extend(
+    2:         f"{category} {count}条"
+    6:         for category, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+           )
+    2:     return lines
+       
+       
+    1: def format_failure_output(fail_lines: list[str], failure_categories: list[str]) -> str:
+    4:     if not fail_lines:
+    2:         return ""
+    2:     stats_lines = build_failure_stats_lines(failure_categories)
+    2:     return "\n\n".join(fail_lines) + "\n\n" + "\n".join(stats_lines) + "\n"

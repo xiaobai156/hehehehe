@@ -1,0 +1,83 @@
+    1: from contextlib import suppress
+       
+    1: from . import abc
+       
+       
+    2: class SpecLoaderAdapter:
+    1:     """
+           Adapt a package spec to adapt the underlying loader.
+           """
+       
+    1:     def __init__(self, spec, adapter=lambda spec: spec.loader):
+    1:         self.spec = spec
+    1:         self.loader = adapter(spec)
+       
+    1:     def __getattr__(self, name):
+    1:         return getattr(self.spec, name)
+       
+       
+    2: class TraversableResourcesLoader:
+    1:     """
+           Adapt a loader to provide TraversableResources.
+           """
+       
+    1:     def __init__(self, spec):
+    1:         self.spec = spec
+       
+    1:     def get_resource_reader(self, name):
+>>>>>>         return DegenerateFiles(self.spec)._native()
+       
+       
+    2: class DegenerateFiles:
+    1:     """
+           Adapter for an existing or non-existant resource reader
+           to provide a degenerate .files().
+           """
+       
+    2:     class Path(abc.Traversable):
+    1:         def iterdir(self):
+>>>>>>             return iter(())
+       
+    1:         def is_dir(self):
+>>>>>>             return False
+       
+    1:         is_file = exists = is_dir  # type: ignore
+       
+    1:         def joinpath(self, other):
+>>>>>>             return DegenerateFiles.Path()
+       
+    1:         @property
+    1:         def name(self):
+>>>>>>             return ''
+       
+    1:         def open(self, mode='rb', *args, **kwargs):
+>>>>>>             raise ValueError()
+       
+    1:     def __init__(self, spec):
+>>>>>>         self.spec = spec
+       
+    1:     @property
+    1:     def _reader(self):
+>>>>>>         with suppress(AttributeError):
+>>>>>>             return self.spec.loader.get_resource_reader(self.spec.name)
+       
+    1:     def _native(self):
+               """
+               Return the native reader if it supports files().
+               """
+>>>>>>         reader = self._reader
+>>>>>>         return reader if hasattr(reader, 'files') else self
+       
+    1:     def __getattr__(self, attr):
+>>>>>>         return getattr(self._reader, attr)
+       
+    1:     def files(self):
+>>>>>>         return DegenerateFiles.Path()
+       
+       
+    1: def wrap_spec(package):
+           """
+           Construct a package spec with traversable compatibility
+           on the spec/loader/reader.
+           """
+    1:     return SpecLoaderAdapter(package.__spec__, TraversableResourcesLoader)

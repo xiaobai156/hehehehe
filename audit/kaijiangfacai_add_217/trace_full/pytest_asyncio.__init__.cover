@@ -1,0 +1,11 @@
+    1: """The main point for importing pytest-asyncio items."""
+       
+    1: from __future__ import annotations
+       
+    1: from importlib.metadata import version
+       
+    1: from .plugin import fixture, is_async_test
+       
+    1: __version__ = version(__name__)
+       
+    1: __all__ = ("fixture", "is_async_test")

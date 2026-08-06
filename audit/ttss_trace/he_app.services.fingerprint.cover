@@ -1,0 +1,107 @@
+    1: from he_app.domain.models import Site
+    1: from he_app.parsers.dedicated.history import (
+           extract_hushuobadao_kill_sum_period_values,
+           extract_kill_sum_period_values,
+           extract_ruyimutan_kill_sum_period_values,
+       )
+    1: from he_app.parsers.dedicated.structured import (
+           DAJIAFA_SITE_ID,
+           YIAIZHIMING_SITE_ID,
+           extract_dajiafa_kill_sum_period_values,
+           extract_yiaizhimin_kill_sum_period_values,
+       )
+    1: from he_app.parsers.dedicated.tables import site_rule
+    1: from he_app.parsers.dedicated.kaijiangfacai import (
+           KAIJIANGFACAI_SITE_ID,
+           extract_kaijiangfacai_kill_sum_period_values,
+       )
+    1: from he_app.parsers.dedicated.tables import (
+           extract_jiuxiao_kill_sum_period_values,
+           extract_woman_flavor_sum_period_values,
+       )
+    1: from he_app.parsers.dedicated.ttss import (
+           TTSS_SITE_IDS,
+           extract_ttss_kill_sum_period_values,
+           find_ttss_history_candidate,
+       )
+    1: from he_app.parsers.registry import REGISTRY
+    1: from he_app.services.single_period import build_document_evidence, parse_site_period
+    1: from he_app.validation.period import is_valid_sum_value
+       
+       
+    1: Fingerprint = dict[int, str]
+       
+       
+    1: def _strict_bulk_values(site: Site, documents: list[str]) -> dict[int, str]:
+    1:     if site.site_id == "s025_topic_435508":
+>>>>>>         return extract_hushuobadao_kill_sum_period_values(documents)
+    1:     if site.site_id == "s109_topic_222783":
+>>>>>>         return extract_ruyimutan_kill_sum_period_values(documents)
+    1:     if site.site_id == YIAIZHIMING_SITE_ID:
+>>>>>>         return extract_yiaizhimin_kill_sum_period_values(documents)
+    1:     if site.site_id == DAJIAFA_SITE_ID:
+>>>>>>         return extract_dajiafa_kill_sum_period_values(documents)
+    1:     if site.site_id == "s073_shuqhbq":
+>>>>>>         return extract_jiuxiao_kill_sum_period_values(documents)
+    1:     if site.site_id == "s085_kcvpleh":
+>>>>>>         return extract_woman_flavor_sum_period_values(documents)
+    1:     if site.site_id == KAIJIANGFACAI_SITE_ID:
+>>>>>>         return extract_kaijiangfacai_kill_sum_period_values(documents)
+    1:     if site.site_id in TTSS_SITE_IDS:
+    1:         return extract_ttss_kill_sum_period_values(documents, site.name)
+>>>>>>     if site.site_id not in REGISTRY._parsers:
+>>>>>>         rule = site_rule(site)
+>>>>>>         return extract_kill_sum_period_values(
+>>>>>>             documents,
+>>>>>>             pick=site.pick,
+>>>>>>             allow_weak=rule.allow_weak_kill_sum_keyword,
+               )
+>>>>>>     return {}
+       
+       
+    1: def build_site_fingerprint(site: Site, documents: list[str], period: int, periods: int) -> Fingerprint:
+    1:     if periods < 1:
+>>>>>>         raise ValueError("periods 必须大于等于 1")
+       
+    1:     fingerprint: Fingerprint = {}
+    1:     bulk_values = _strict_bulk_values(site, documents)
+    4:     for current_period in range(period, period - periods, -1):
+    3:         value = bulk_values.get(current_period)
+    3:         values = value.split(",") if value is not None else []
+    9:         if values and all(is_valid_sum_value(item) for item in values):
+    3:             if site.site_id in TTSS_SITE_IDS and len(values) == 1:
+    6:                 history_candidate = find_ttss_history_candidate(
+    3:                     documents, current_period, site.name
+                       )
+    3:                 if history_candidate is not None:
+    6:                     evidence = build_document_evidence(
+    3:                         site,
+    3:                         current_period,
+    3:                         values,
+    3:                         history_candidate.line,
+    3:                         documents,
+                           )
+    3:                     if evidence:
+    3:                         fingerprint[current_period] = value
+    3:                         continue
+>>>>>>             detail = f"{current_period}期严格历史指纹 {value}"
+>>>>>>             if site.site_id == KAIJIANGFACAI_SITE_ID:
+>>>>>>                 detail = (
+>>>>>>                     f"{current_period}期开奖发财 综合杀料 杀合[{value}]"
+                       )
+>>>>>>             evidence = build_document_evidence(
+>>>>>>                 site,
+>>>>>>                 current_period,
+>>>>>>                 values,
+>>>>>>                 detail,
+>>>>>>                 documents,
+                   )
+>>>>>>             if evidence:
+>>>>>>                 fingerprint[current_period] = value
+>>>>>>                 continue
+       
+>>>>>>         parsed = parse_site_period(site, current_period, documents)
+>>>>>>         if not parsed.success or not parsed.evidence:
+>>>>>>             continue
+>>>>>>         fingerprint[current_period] = ",".join(parsed.evidence[0].values)
+    1:     return fingerprint

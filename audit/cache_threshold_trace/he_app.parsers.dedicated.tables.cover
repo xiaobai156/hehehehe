@@ -1,0 +1,348 @@
+    1: import re
+       
+       # ruff: noqa: F403,F405
+       
+    1: from bs4 import BeautifulSoup
+       
+    1: from he_app.domain.errors import DedicatedCandidateConflict
+    1: from he_app.domain.models import Candidate, PreviousInfo, Site, SiteRule
+    1: from he_app.domain.policies import normalize_digit_text, normalize_pick, normalize_text
+    1: from he_app.parsers.common import *
+    1: from he_app.parsers.policies import SITE_RULES, VALUE_RE
+    1: from he_app.validation.conflict import select_unique_candidate
+    1: from he_app.validation.direction import directional_window
+       
+       
+    1: def clean_open_text(text: str) -> str:
+>>>>>>     return re.sub(r"[\s:：,，。;；\[\]()（）【】{}<>《》]+", "", text).strip()
+       
+       
+    1: def parse_open_status(line: str) -> tuple[str | None, str | None]:
+>>>>>>     line = normalize_text(line)
+>>>>>>     if "开" not in line:
+>>>>>>         return None, None
+>>>>>>     tail = line.split("开", 1)[1]
+>>>>>>     status_match = re.search(r"(错|准|对|中)", tail)
+>>>>>>     if status_match is None:
+>>>>>>         open_text = clean_open_text(tail)
+>>>>>>         return (open_text or None), None
+>>>>>>     status = status_match.group(1)
+>>>>>>     open_text = clean_open_text(tail[: status_match.start()])
+>>>>>>     return (open_text or None), status
+       
+       
+    1: def has_valid_open_text(open_text: str | None) -> bool:
+>>>>>>     if not open_text:
+>>>>>>         return False
+>>>>>>     compact = normalize_digit_text(open_text)
+>>>>>>     if compact in {"0", "00", "000", "0000", "?", "??", "???", "？", "？？", "？？？"}:
+>>>>>>         return False
+>>>>>>     if set(compact) <= {"?", "？", "0", "０"}:
+>>>>>>         return False
+>>>>>>     return bool(re.search(r"\d|[鼠牛虎兔龙蛇马羊猴鸡狗猪]", compact))
+       
+       
+    1: def extract_values_from_kill_sum_row(text: str) -> list[str]:
+    7:     normalized = normalize_digit_text(normalize_text(text))
+    7:     values: list[str] = []
+   14:     for match in VALUE_RE.finditer(normalized):
+    7:         value = int(normalize_digit_text(match.group(1)))
+    7:         if 1 <= value <= 13:
+    7:             item = f"{value:02d}合"
+    7:             if item not in values:
+    7:                 values.append(item)
+    7:     return values
+       
+       
+    1: def evaluate_previous(previous: Candidate | None, previous_period: int) -> PreviousInfo:
+>>>>>>     if previous is None:
+>>>>>>         return PreviousInfo(f"{previous_period}期 未找到", False, "前一期没找到")
+       
+>>>>>>     open_text, status = parse_open_status(previous.line)
+>>>>>>     if not has_valid_open_text(open_text):
+>>>>>>         return PreviousInfo(f"{previous_period}期 {previous.values} 没开奖号", False, "前一期没开奖号")
+>>>>>>     if status is None:
+>>>>>>         return PreviousInfo(f"{previous_period}期 {previous.values} 开{open_text} 没对错", False, "前一期没对错")
+>>>>>>     if status == "错":
+>>>>>>         return PreviousInfo(f"{previous_period}期 {previous.values} 开{open_text}{status}", False, "前一期错")
+       
+>>>>>>     return PreviousInfo(f"{previous_period}期 {previous.values} 开{open_text}{status}", True)
+       
+       
+    1: def format_success_result(site: Site, period: int, current: Candidate) -> str:
+   21:     return f"{current.values} {site.name}"
+       
+       
+    1: def site_rule(site: Site) -> SiteRule:
+  282:     return SITE_RULES.get(site.site_id, SiteRule())
+       
+       
+    1: def site_allows_strict_no_locator(site: Site) -> bool:
+>>>>>>     return not site_rule(site).require_body_locator
+       
+       
+    5: def select_dedicated_candidate(
+    1:     matches: list[Candidate],
+    1:     pick: str,
+    2:     detect_conflict: bool = True,
+    1: ) -> Candidate | None:
+   21:     return select_unique_candidate(matches, pick, detect_conflict)
+       
+       
+    1: def select_directional_candidate_group(groups: list[list[Candidate]], pick: str) -> Candidate | None:
+>>>>>>     nonempty_groups = [group for group in groups if group]
+>>>>>>     if not nonempty_groups:
+>>>>>>         return None
+>>>>>>     selected = directional_window(nonempty_groups, pick, 1)[0]
+>>>>>>     edge = directional_window(selected, pick, 1)
+>>>>>>     return select_dedicated_candidate(edge, pick, detect_conflict=False)
+       
+       
+    1: def has_period_cycle_boundary(text: str) -> bool:
+>>>>>>     if re.search(r"分隔|另一个资料块|另一(?:个|组|版)资料", text):
+>>>>>>         return True
+>>>>>>     periods = [int(value) for value in re.findall(r"(?<!\d)(\d{1,4})\s*期", text)]
+>>>>>>     return any(abs(current - previous) > 180 for previous, current in zip(periods, periods[1:]))
+       
+       
+    1: TableBlock = list[tuple[int, Candidate]]
+       
+       
+    1: def _tongtian_table_blocks(documents: list[str]) -> list[TableBlock]:
+    2:     blocks: list[TableBlock] = []
+    2:     order = 0
+    4:     for document in documents:
+    2:         soup = BeautifulSoup(document, "html.parser")
+    2:         tables = soup.find_all("table")
+    4:         table_texts = [table.get_text(" ", strip=True) for table in tables]
+    2:         if not table_texts:
+    2:             table_texts = [soup.get_text(" ", strip=True) if soup.find() else document]
+       
+    4:         for table_text in table_texts:
+    2:             normalized = normalize_digit_text(normalize_text(table_text))
+    2:             marker_index = normalized.find("澳门综合杀")
+    2:             if marker_index < 0 or "杀合" not in normalized[marker_index : marker_index + 80]:
+>>>>>>                 continue
+    2:             section = normalized[marker_index:]
+    4:             stop_match = re.search(
+    2:                 r"澳门六合彩合数属性|澳彩合数属性|合数属性|其他栏目|上一篇|下一篇|Copyright",
+    2:                 section,
+                   )
+    2:             if stop_match is not None:
+    1:                 section = section[: stop_match.start()]
+       
+    2:             block: TableBlock = []
+    9:             for segment in split_all_period_segments(section):
+    7:                 periods = period_numbers_in_text(segment)
+    7:                 values = extract_values_from_kill_sum_row(segment)
+    7:                 if len(periods) != 1 or len(values) != 1:
+>>>>>>                     continue
+    7:                 row_period = periods[0]
+   14:                 block.append(
+    7:                     (
+    7:                         row_period,
+   14:                         Candidate(
+    7:                             values=values[0],
+   14:                             line=normalize_text(
+    7:                                 f"{row_period}期:通天综合杀 绝杀一合[{values[0]}] {segment}"
+                                   ),
+    7:                             score=120,
+    7:                             order=order,
+                               ),
+                           )
+                       )
+    7:                 order += 1
+    2:             if block:
+    1:                 blocks.append(block)
+    2:     return _deduplicate_table_blocks(blocks)
+       
+       
+    5: def find_tongtian_kill_sum_candidate_with_direction(
+    4:     documents: list[str], period: int, pick: str = "top"
+    1: ) -> tuple[Candidate | None, bool]:
+    2:     return _select_table_period_candidate(_tongtian_table_blocks(documents), period, pick)
+       
+       
+    1: def find_tongtian_kill_sum_candidate(documents: list[str], period: int) -> Candidate | None:
+>>>>>>     return find_tongtian_kill_sum_candidate_with_direction(documents, period, "top")[0]
+       
+       
+    1: def _deduplicate_table_blocks(blocks: list[TableBlock]) -> list[TableBlock]:
+    3:     unique: list[TableBlock] = []
+    3:     signatures: set[tuple[tuple[int, str], ...]] = set()
+    5:     for block in blocks:
+   14:         signature = tuple((period, candidate.values) for period, candidate in block)
+    2:         if not signature or signature in signatures:
+>>>>>>             continue
+    2:         signatures.add(signature)
+    2:         unique.append(block)
+    3:     return unique
+       
+       
+    5: def _select_table_period_candidate(
+    1:     blocks: list[TableBlock],
+    1:     period: int,
+    1:     pick: str,
+    1: ) -> tuple[Candidate | None, bool]:
+    3:     normalized_pick = normalize_pick(pick)
+   12:     target_found = any(row_period == period for block in blocks for row_period, _candidate in block)
+    8:     nonempty_blocks = [block for block in blocks if block]
+    3:     if not nonempty_blocks:
+    1:         return None, target_found
+       
+           # A table block is an independent candidate sequence. Direction selects
+           # the first/last block, then only that block's first/last valid row can be
+           # eligible. Interior rows cannot conflict with or rescue the edge row.
+    2:     selected_block = directional_window(nonempty_blocks, normalized_pick, 1)[0]
+    2:     edge = directional_window(selected_block, normalized_pick, 1)
+    8:     matches = [
+    1:         candidate
+    4:         for row_period, candidate in edge
+    5:         if row_period == period
+           ]
+    2:     return select_dedicated_candidate(matches, normalized_pick, detect_conflict=False), target_found and not matches
+       
+       
+    1: def _table_period_values(blocks: list[TableBlock]) -> dict[int, str]:
+>>>>>>     values: dict[int, str] = {}
+>>>>>>     lines: dict[int, list[str]] = {}
+>>>>>>     for block in blocks:
+>>>>>>         for period, candidate in block:
+>>>>>>             existing = values.get(period)
+>>>>>>             if existing is not None and existing != candidate.values:
+>>>>>>                 raise DedicatedCandidateConflict(
+>>>>>>                     sorted({existing, candidate.values}),
+>>>>>>                     [*lines.get(period, []), candidate.line],
+                       )
+>>>>>>             values[period] = candidate.values
+>>>>>>             lines.setdefault(period, []).append(candidate.line)
+>>>>>>     return values
+       
+       
+    1: def _jiuxiao_table_blocks(documents: list[str]) -> list[TableBlock]:
+>>>>>>     anchor_re = re.compile(r"(?:绝|絕)\s*(?:杀|殺)\s*①\s*段\s*①\s*合")
+>>>>>>     next_anchor_re = re.compile(r"(?:绝|絕)\s*(?:杀|殺)\s*三\s*尾")
+>>>>>>     row_re = re.compile(
+>>>>>>         r"(?<!\d)(\d{1,4})\s*期\s*(?:杀|殺)\s*\[\s*(0?[1-9]|1[0-3])\s*合\s*\]\s*(?:开|開)",
+>>>>>>         re.I,
+           )
+>>>>>>     blocks: list[TableBlock] = []
+>>>>>>     for document in documents:
+>>>>>>         soup = BeautifulSoup(document, "html.parser")
+>>>>>>         text = soup.get_text(" ", strip=True) if soup.find() else document
+>>>>>>         text = normalize_digit_text(normalize_text(text))
+>>>>>>         anchor = anchor_re.search(text)
+>>>>>>         if anchor is None:
+>>>>>>             continue
+>>>>>>         section = text[anchor.start():]
+>>>>>>         next_anchor = next_anchor_re.search(section, anchor.end() - anchor.start())
+>>>>>>         if next_anchor is not None:
+>>>>>>             section = section[: next_anchor.start()]
+       
+>>>>>>         block: TableBlock = []
+>>>>>>         for match in row_re.finditer(section):
+>>>>>>             period = int(match.group(1))
+>>>>>>             value = f"{int(match.group(2)):02d}合"
+>>>>>>             block.append(
+>>>>>>                 (
+>>>>>>                     period,
+>>>>>>                     Candidate(
+>>>>>>                         values=value,
+>>>>>>                         line=normalize_text(f"{period}期:九肖杀 绝杀①段①合 {match.group(0)}"),
+>>>>>>                         score=120,
+>>>>>>                         order=len(block),
+                           ),
+                       )
+                   )
+>>>>>>         blocks.append(block)
+>>>>>>     return _deduplicate_table_blocks(blocks)
+       
+       
+    5: def find_jiuxiao_kill_sum_candidate_with_direction(
+    1:     documents: list[str],
+    1:     period: int,
+    2:     pick: str = "top",
+    1: ) -> tuple[Candidate | None, bool]:
+>>>>>>     return _select_table_period_candidate(_jiuxiao_table_blocks(documents), period, pick)
+       
+       
+    5: def find_jiuxiao_kill_sum_candidate(
+    1:     documents: list[str],
+    1:     period: int,
+    2:     pick: str = "top",
+    1: ) -> Candidate | None:
+>>>>>>     return find_jiuxiao_kill_sum_candidate_with_direction(documents, period, pick)[0]
+       
+       
+    1: def extract_jiuxiao_kill_sum_period_values(documents: list[str]) -> dict[int, str]:
+>>>>>>     return _table_period_values(_jiuxiao_table_blocks(documents))
+       
+       
+    1: def _woman_flavor_table_blocks(documents: list[str]) -> list[TableBlock]:
+    2:     anchor_re = re.compile(
+    1:         r"(?:澳门|澳門)?\s*女人味[^期]{0,50}(?:绝|絕)\s*(?:杀|殺)\s*一\s*尾[^期]{0,20}二\s*合",
+    1:         re.I,
+           )
+    2:     row_re = re.compile(
+    1:         r"(?<!\d)(\d{1,4})\s*期\s*[;:]?\s*(?:绝|絕)\s*(?:杀|殺)"
+               r"[^期]{0,40}?\[\s*\d{1,2}\s*尾\s*\][^期]{0,20}?"
+               r"\[\s*(0?[1-9]|1[0-3])\s*合\s*[-－]\s*(0?[1-9]|1[0-3])\s*合\s*\]\s*(?:开|開)",
+    1:         re.I,
+           )
+    1:     blocks: list[TableBlock] = []
+    2:     for document in documents:
+    1:         soup = BeautifulSoup(document, "html.parser")
+    1:         text = soup.get_text(" ", strip=True) if soup.find() else document
+    1:         text = normalize_digit_text(normalize_text(text))
+    1:         anchor = anchor_re.search(text)
+    1:         if anchor is None:
+>>>>>>             continue
+    1:         section = text[anchor.start():]
+    2:         stop_match = re.search(
+    1:             r"澳门六合彩合数属性|澳彩合数属性|合数属性|其他栏目|上一篇|下一篇|Copyright",
+    1:             section,
+               )
+    1:         if stop_match is not None:
+>>>>>>             section = section[: stop_match.start()]
+       
+    1:         block: TableBlock = []
+    4:         for match in row_re.finditer(section):
+    3:             period = int(match.group(1))
+    3:             values = [f"{int(match.group(2)):02d}合", f"{int(match.group(3)):02d}合"]
+    6:             block.append(
+    3:                 (
+    3:                     period,
+    6:                     Candidate(
+    3:                         values=",".join(values),
+    3:                         line=normalize_text(f"{period}期:女人味 绝杀一尾二合 {match.group(0)}"),
+    3:                         score=120,
+    3:                         order=len(block),
+                           ),
+                       )
+                   )
+    1:         blocks.append(block)
+    1:     return _deduplicate_table_blocks(blocks)
+       
+       
+    5: def find_woman_flavor_sum_candidate_with_direction(
+    1:     documents: list[str],
+    1:     period: int,
+    2:     pick: str = "top",
+    1: ) -> tuple[Candidate | None, bool]:
+    1:     return _select_table_period_candidate(_woman_flavor_table_blocks(documents), period, pick)
+       
+       
+    5: def find_woman_flavor_sum_candidate(
+    1:     documents: list[str],
+    1:     period: int,
+    2:     pick: str = "top",
+    1: ) -> Candidate | None:
+>>>>>>     return find_woman_flavor_sum_candidate_with_direction(documents, period, pick)[0]
+       
+       
+    1: def extract_woman_flavor_sum_period_values(documents: list[str]) -> dict[int, str]:
+>>>>>>     return _table_period_values(_woman_flavor_table_blocks(documents))
+       
+       
+       
+   93: __all__ = [name for name, value in globals().items() if callable(value) and getattr(value, "__module__", None) == __name__]

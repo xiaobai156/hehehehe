@@ -1,0 +1,5 @@
+    1: CACHE_FILE = "he_success_cache.json"
+    1: SITES_FILE = "sites.json"
+    1: DEFAULT_DUPLICATE_FINGERPRINT_CACHE = "outputs/recent_10_cache.json"
+    1: DEFAULT_OUTPUT_DIR = r"C:\Users\Administrator\Desktop\每天工具\爬虫合集\七类数据统一归纳"
+    1: DEFAULT_FAILURE_OUTPUT_DIR = r"C:\Users\Administrator\Desktop\每天工具\爬虫合集\七类数据统一归纳失败"

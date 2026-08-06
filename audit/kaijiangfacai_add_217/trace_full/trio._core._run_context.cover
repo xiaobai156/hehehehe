@@ -1,0 +1,15 @@
+    1: from __future__ import annotations
+       
+    1: import threading
+    1: from typing import TYPE_CHECKING, Final
+       
+    1: if TYPE_CHECKING:
+>>>>>>     from ._run import Runner, Task
+       
+       
+    2: class RunContext(threading.local):
+    1:     runner: Runner
+    1:     task: Task
+       
+       
+    1: GLOBAL_RUN_CONTEXT: Final = RunContext()

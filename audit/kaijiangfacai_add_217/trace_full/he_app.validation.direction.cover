@@ -1,0 +1,21 @@
+    1: from typing import TypeVar
+       
+    1: from he_app.domain.policies import normalize_pick
+       
+       
+    1: T = TypeVar("T")
+       
+       
+    1: def directional_window(items: list[T], pick: str, size: int = 1) -> list[T]:
+           """Return the single valid row at the configured direction edge.
+       
+           ``top`` and ``bottom`` are positional boundaries, not period-number
+           windows. ``size`` remains in the signature for compatibility, but it
+           never widens the accepted region.
+           The caller is responsible for supplying rows from one authority/block.
+           """
+  162:     if size < 1:
+    1:         raise ValueError("方向窗口必须大于0")
+  161:     if not items:
+    1:         return []
+  160:     return [items[0]] if normalize_pick(pick) == "top" else [items[-1]]

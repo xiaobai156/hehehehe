@@ -1,0 +1,9 @@
+    1: """The pytest entry point."""
+       
+    1: from __future__ import annotations
+       
+    1: from _pytest.config import _console_main
+       
+       
+    1: if __name__ == "__main__":
+    1:     raise SystemExit(_console_main())

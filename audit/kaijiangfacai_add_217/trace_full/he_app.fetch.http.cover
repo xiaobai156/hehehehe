@@ -1,0 +1,209 @@
+    1: import re
+    1: import subprocess
+    1: from contextlib import nullcontext
+    1: from threading import Lock
+    1: from urllib.parse import urlparse
+       
+    1: import requests
+       
+    1: from he_app.domain.models import Site
+       
+       
+    1: DEFAULT_HEADERS = {
+    1:     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
+    1:     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    1:     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+       }
+    1: CURL_VARIANT_BY_HOST: dict[str, int] = {}
+    1: CURL_VARIANT_MEMORY_LOCK = Lock()
+       
+       
+    1: def host_key(url: str) -> str:
+    2:     parsed = urlparse(url)
+    2:     return parsed.netloc or url
+       
+       
+    1: def build_host_locks(sites: list[Site], mirror_url_map: dict[int, list[str]]) -> dict[str, Lock]:
+    6:     hosts = {host_key(site.url) for site in sites}
+    4:     for urls in mirror_url_map.values():
+    4:         hosts.update(host_key(url) for url in urls)
+    6:     return {host: Lock() for host in hosts}
+       
+       
+    1: def create_session(host_locks: dict[str, Lock] | None = None) -> requests.Session:
+>>>>>>     session = requests.Session()
+>>>>>>     session.headers.update(DEFAULT_HEADERS)
+>>>>>>     session._he_host_locks = host_locks or {}
+>>>>>>     return session
+       
+       
+    1: def fetch_text(session: requests.Session, url: str, timeout: int) -> str:
+>>>>>>     network_lock = getattr(session, "_he_host_locks", {}).get(host_key(url))
+>>>>>>     with network_lock if network_lock is not None else nullcontext():
+>>>>>>         try:
+>>>>>>             return fetch_text_fast(session, url, timeout)
+>>>>>>         except Exception as exc:
+>>>>>>             if is_deterministic_http_error(exc):
+>>>>>>                 raise
+>>>>>>             return fetch_text_with_curl(url, timeout)
+       
+       
+    1: def is_deterministic_http_error(exc: Exception) -> bool:
+>>>>>>     match = re.search(r"HTTP Error (\d{3})", str(exc), re.I)
+>>>>>>     if match is None:
+>>>>>>         return False
+>>>>>>     status = int(match.group(1))
+>>>>>>     return 400 <= status < 500 and status not in {408, 409, 425, 429}
+       
+       
+    1: def fetch_text_fast(session: requests.Session, url: str, timeout: int) -> str:
+>>>>>>     response = session.get(url, timeout=timeout, verify=False, allow_redirects=True)
+>>>>>>     if not 200 <= response.status_code < 400:
+>>>>>>         raise RuntimeError(f"HTTP Error {response.status_code}: {http_status_label(response.status_code)}")
+>>>>>>     return decode_response_bytes(response.content, response.headers.get("Content-Type", ""))
+       
+       
+    1: def curl_base_command(url: str, timeout: int) -> list[str]:
+>>>>>>     return [
+>>>>>>         "curl.exe",
+>>>>>>         "-k",
+>>>>>>         "-L",
+>>>>>>         "--ipv4",
+>>>>>>         "--http1.1",
+>>>>>>         "--ssl-no-revoke",
+>>>>>>         "--connect-timeout",
+>>>>>>         str(max(5, min(timeout, 15))),
+>>>>>>         "--max-time",
+>>>>>>         str(max(10, timeout + 10)),
+>>>>>>         "-sS",
+>>>>>>         "-A",
+>>>>>>         DEFAULT_HEADERS["User-Agent"],
+>>>>>>         "-H",
+>>>>>>         "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+>>>>>>         "-H",
+>>>>>>         "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8",
+>>>>>>         "-H",
+>>>>>>         "Cache-Control: no-cache",
+>>>>>>         "-H",
+>>>>>>         "Pragma: no-cache",
+>>>>>>         "-H",
+>>>>>>         "Connection: close",
+           ]
+       
+       
+    1: def curl_command_variants(url: str, timeout: int) -> list[list[str]]:
+>>>>>>     base = curl_base_command(url, timeout)
+>>>>>>     return [
+>>>>>>         base + ["--compressed", url],
+>>>>>>         base + ["--tls-max", "1.2", "--compressed", url],
+>>>>>>         base + ["--tlsv1.2", "--compressed", url],
+>>>>>>         base + [url],
+           ]
+       
+       
+    1: def split_curl_http_status(raw: bytes) -> tuple[bytes, int | None]:
+>>>>>>     marker = b"\n__HTTP_STATUS__:"
+>>>>>>     if marker not in raw:
+>>>>>>         return raw, None
+>>>>>>     body, status_bytes = raw.rsplit(marker, 1)
+>>>>>>     try:
+>>>>>>         return body, int(status_bytes.strip()[:3])
+>>>>>>     except ValueError:
+>>>>>>         return body, None
+       
+       
+    1: def should_try_next_curl_variant(returncode: int, status: int | None, message: str) -> bool:
+>>>>>>     if returncode in {35, 56, 92}:
+>>>>>>         return True
+>>>>>>     if status in {502, 503, 520, 521, 522, 523, 524}:
+>>>>>>         return True
+>>>>>>     lowered = message.lower()
+>>>>>>     return any(
+>>>>>>         marker in lowered
+>>>>>>         for marker in (
+                   "bad gateway",
+                   "failed to receive handshake",
+                   "ssl/tls connection failed",
+                   "failure when receiving data",
+                   "connection reset",
+                   "connection closed",
+               )
+           )
+       
+       
+    1: def reset_curl_variant_memory() -> None:
+>>>>>>     with CURL_VARIANT_MEMORY_LOCK:
+>>>>>>         CURL_VARIANT_BY_HOST.clear()
+       
+       
+    1: def fetch_text_with_curl(url: str, timeout: int) -> str:
+>>>>>>     last_error = "no curl attempt"
+>>>>>>     commands = curl_command_variants(url, timeout)
+>>>>>>     host = host_key(url)
+>>>>>>     with CURL_VARIANT_MEMORY_LOCK:
+>>>>>>         preferred = CURL_VARIANT_BY_HOST.get(host)
+>>>>>>     preferred_indices = [preferred] if preferred is not None and preferred < len(commands) else []
+>>>>>>     attempt_indices = preferred_indices + [index for index in range(len(commands)) if index != preferred]
+       
+>>>>>>     for command_index in attempt_indices:
+>>>>>>         command = commands[command_index]
+>>>>>>         command = command[:-1] + ["-w", "\n__HTTP_STATUS__:%{http_code}", command[-1]]
+>>>>>>         completed = subprocess.run(command, capture_output=True, check=False, timeout=timeout + 15)
+>>>>>>         body, status = split_curl_http_status(completed.stdout)
+>>>>>>         stderr = decode_response_bytes(completed.stderr).strip()
+>>>>>>         stdout_text = decode_response_bytes(body).strip()
+>>>>>>         message = stderr or stdout_text[:300] or "no curl stderr"
+       
+>>>>>>         if completed.returncode == 0 and status is not None and 200 <= status < 400:
+>>>>>>             with CURL_VARIANT_MEMORY_LOCK:
+>>>>>>                 CURL_VARIANT_BY_HOST[host] = command_index
+>>>>>>             return decode_response_bytes(body, "")
+>>>>>>         if completed.returncode == 0 and status is None:
+>>>>>>             with CURL_VARIANT_MEMORY_LOCK:
+>>>>>>                 CURL_VARIANT_BY_HOST[host] = command_index
+>>>>>>             return decode_response_bytes(body, "")
+       
+>>>>>>         if completed.returncode == 0:
+>>>>>>             last_error = f"HTTP Error {status}: {http_status_label(status)}"
+               else:
+>>>>>>             last_error = f"curl exit {completed.returncode}: {message}"
+>>>>>>         if not should_try_next_curl_variant(completed.returncode, status, last_error):
+>>>>>>             break
+       
+>>>>>>     raise RuntimeError(last_error)
+       
+       
+    1: def http_status_label(status: int | None) -> str:
+>>>>>>     labels = {
+>>>>>>         502: "Bad Gateway",
+>>>>>>         503: "Service Unavailable",
+>>>>>>         520: "Web Server Returned an Unknown Error",
+>>>>>>         521: "Web Server Is Down",
+>>>>>>         522: "Connection Timed Out",
+>>>>>>         523: "Origin Is Unreachable",
+>>>>>>         524: "A Timeout Occurred",
+           }
+>>>>>>     return labels.get(status, "HTTP request failed")
+       
+       
+    1: def decode_response_bytes(data: bytes, content_type: str = "") -> str:
+>>>>>>     for encoding in parse_charset_candidates(content_type):
+>>>>>>         try:
+>>>>>>             return data.decode(encoding)
+>>>>>>         except UnicodeDecodeError:
+>>>>>>             continue
+>>>>>>     for encoding in ("utf-8", "gb18030", "big5"):
+>>>>>>         try:
+>>>>>>             return data.decode(encoding)
+>>>>>>         except UnicodeDecodeError:
+>>>>>>             continue
+>>>>>>     return data.decode("utf-8", errors="ignore")
+       
+       
+    1: def parse_charset_candidates(content_type: str) -> list[str]:
+>>>>>>     candidates: list[str] = []
+>>>>>>     match = re.search(r"charset=([A-Za-z0-9_-]+)", content_type or "", re.I)
+>>>>>>     if match:
+>>>>>>         candidates.append(match.group(1))
+>>>>>>     return candidates
+       

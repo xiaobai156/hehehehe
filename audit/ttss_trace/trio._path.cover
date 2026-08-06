@@ -1,0 +1,289 @@
+    1: from __future__ import annotations
+       
+    1: import os
+    1: import pathlib
+    1: import sys
+    1: from functools import partial, update_wrapper
+    1: from inspect import cleandoc
+    1: from typing import (
+           IO,
+           TYPE_CHECKING,
+           Any,
+           BinaryIO,
+           ClassVar,
+           Concatenate,
+           Literal,
+           TypeVar,
+           overload,
+       )
+       
+    1: from trio._file_io import AsyncIOWrapper, wrap_file
+    1: from trio._util import final
+    1: from trio.to_thread import run_sync
+       
+    1: if TYPE_CHECKING:
+>>>>>>     from collections.abc import Awaitable, Callable, Iterable
+>>>>>>     from io import BufferedRandom, BufferedReader, BufferedWriter, FileIO, TextIOWrapper
+       
+>>>>>>     from _typeshed import (
+               OpenBinaryMode,
+               OpenBinaryModeReading,
+               OpenBinaryModeUpdating,
+               OpenBinaryModeWriting,
+               OpenTextMode,
+           )
+>>>>>>     from typing_extensions import ParamSpec, Self
+       
+>>>>>>     P = ParamSpec("P")
+       
+>>>>>>     PathT = TypeVar("PathT", bound="Path")
+>>>>>>     T = TypeVar("T")
+       
+       
+    1: def _wraps_async(  # type: ignore[explicit-any]
+           wrapped: Callable[..., object],
+       ) -> Callable[[Callable[P, T]], Callable[P, Awaitable[T]]]:
+   36:     def decorator(fn: Callable[P, T]) -> Callable[P, Awaitable[T]]:
+   36:         async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+>>>>>>             return await run_sync(partial(fn, *args, **kwargs))
+       
+   36:         update_wrapper(wrapper, wrapped)
+   36:         if wrapped.__doc__:
+   36:             module = wrapped.__module__
+                   # these are exported specially from CPython's intersphinx inventory
+   36:             module = module.replace("pathlib._local", "pathlib")
+   36:             module = module.replace("pathlib._abc", "pathlib")
+       
+   36:             name = wrapped.__qualname__
+   72:             name = name.replace(
+   36:                 "PathBase", "Path"
+                   )  # I'm not sure why this is necessary
+       
+   36:             wrapper.__doc__ = (
+   72:                 f"Like :meth:`~{module}.{name}`, but async.\n"
+                       f"\n"
+   36:                 f"{cleandoc(wrapped.__doc__)}\n"
+                   )
+   36:         return wrapper
+       
+   36:     return decorator
+       
+       
+    1: def _wrap_method(
+           fn: Callable[Concatenate[pathlib.Path, P], T],
+       ) -> Callable[Concatenate[Path, P], Awaitable[T]]:
+   24:     @_wraps_async(fn)
+   24:     def wrapper(self: Path, /, *args: P.args, **kwargs: P.kwargs) -> T:
+>>>>>>         return fn(self._wrapped_cls(self), *args, **kwargs)
+       
+   24:     return wrapper
+       
+       
+    1: def _wrap_method_path(
+           fn: Callable[Concatenate[pathlib.Path, P], pathlib.Path],
+       ) -> Callable[Concatenate[PathT, P], Awaitable[PathT]]:
+    6:     @_wraps_async(fn)
+    6:     def wrapper(self: PathT, /, *args: P.args, **kwargs: P.kwargs) -> PathT:
+>>>>>>         return self.__class__(fn(self._wrapped_cls(self), *args, **kwargs))
+       
+    6:     return wrapper
+       
+       
+    1: def _wrap_method_path_iterable(
+           fn: Callable[Concatenate[pathlib.Path, P], Iterable[pathlib.Path]],
+       ) -> Callable[Concatenate[PathT, P], Awaitable[Iterable[PathT]]]:
+    3:     @_wraps_async(fn)
+    3:     def wrapper(self: PathT, /, *args: P.args, **kwargs: P.kwargs) -> Iterable[PathT]:
+>>>>>>         return map(self.__class__, [*fn(self._wrapped_cls(self), *args, **kwargs)])
+       
+    3:     if wrapper.__doc__:
+    6:         wrapper.__doc__ += (
+    6:             f"\n"
+                   f"This is an async method that returns a synchronous iterator, so you\n"
+                   f"use it like:\n"
+                   f"\n"
+                   f".. code:: python\n"
+                   f"\n"
+    3:             f"    for subpath in await mypath.{fn.__name__}():\n"
+                   f"        ...\n"
+                   f"\n"
+                   f".. note::\n"
+                   f"\n"
+                   f"    The iterator is loaded into memory immediately during the initial\n"
+                   f"    call (see `issue #501\n"
+                   f"    <https://github.com/python-trio/trio/issues/501>`__ for discussion).\n"
+               )
+    3:     return wrapper
+       
+       
+    2: class Path(pathlib.PurePath):
+    1:     """An async :class:`pathlib.Path` that executes blocking methods in :meth:`trio.to_thread.run_sync`.
+       
+           Instantiating :class:`Path` returns a concrete platform-specific subclass, one of :class:`PosixPath` or
+           :class:`WindowsPath`.
+           """
+       
+    1:     __slots__ = ()
+       
+    1:     _wrapped_cls: ClassVar[type[pathlib.Path]]
+       
+    1:     def __new__(cls, *args: str | os.PathLike[str]) -> Self:
+>>>>>>         if cls is Path:
+>>>>>>             cls = WindowsPath if os.name == "nt" else PosixPath  # type: ignore[assignment]
+>>>>>>         return super().__new__(cls, *args)
+       
+    1:     @classmethod
+    1:     @_wraps_async(pathlib.Path.cwd)
+    1:     def cwd(cls) -> Self:
+>>>>>>         return cls(pathlib.Path.cwd())
+       
+    1:     @classmethod
+    1:     @_wraps_async(pathlib.Path.home)
+    1:     def home(cls) -> Self:
+>>>>>>         return cls(pathlib.Path.home())
+       
+    1:     @overload
+    1:     async def open(
+               self,
+    1:         mode: OpenTextMode = "r",
+    1:         buffering: int = -1,
+    1:         encoding: str | None = None,
+    1:         errors: str | None = None,
+    1:         newline: str | None = None,
+>>>>>>     ) -> AsyncIOWrapper[TextIOWrapper]: ...
+       
+    1:     @overload
+    1:     async def open(
+               self,
+               mode: OpenBinaryMode,
+               buffering: Literal[0],
+    1:         encoding: None = None,
+    1:         errors: None = None,
+    1:         newline: None = None,
+>>>>>>     ) -> AsyncIOWrapper[FileIO]: ...
+       
+    1:     @overload
+    1:     async def open(
+               self,
+               mode: OpenBinaryModeUpdating,
+    1:         buffering: Literal[-1, 1] = -1,
+    1:         encoding: None = None,
+    1:         errors: None = None,
+    1:         newline: None = None,
+>>>>>>     ) -> AsyncIOWrapper[BufferedRandom]: ...
+       
+    1:     @overload
+    1:     async def open(
+               self,
+               mode: OpenBinaryModeWriting,
+    1:         buffering: Literal[-1, 1] = -1,
+    1:         encoding: None = None,
+    1:         errors: None = None,
+    1:         newline: None = None,
+>>>>>>     ) -> AsyncIOWrapper[BufferedWriter]: ...
+       
+    1:     @overload
+    1:     async def open(
+               self,
+               mode: OpenBinaryModeReading,
+    1:         buffering: Literal[-1, 1] = -1,
+    1:         encoding: None = None,
+    1:         errors: None = None,
+    1:         newline: None = None,
+>>>>>>     ) -> AsyncIOWrapper[BufferedReader]: ...
+       
+    1:     @overload
+    1:     async def open(
+               self,
+               mode: OpenBinaryMode,
+    1:         buffering: int = -1,
+    1:         encoding: None = None,
+    1:         errors: None = None,
+    1:         newline: None = None,
+>>>>>>     ) -> AsyncIOWrapper[BinaryIO]: ...
+       
+    1:     @overload
+    1:     async def open(  # type: ignore[explicit-any]  # Any usage matches builtins.open().
+               self,
+               mode: str,
+    1:         buffering: int = -1,
+    1:         encoding: str | None = None,
+    1:         errors: str | None = None,
+    1:         newline: str | None = None,
+>>>>>>     ) -> AsyncIOWrapper[IO[Any]]: ...
+       
+    1:     @_wraps_async(pathlib.Path.open)
+    1:     def open(self, *args: Any, **kwargs: Any) -> AsyncIOWrapper[IO[Any]]:  # type: ignore[misc, explicit-any]  # Overload return mismatch.
+>>>>>>         return wrap_file(self._wrapped_cls(self).open(*args, **kwargs))
+       
+    1:     def __repr__(self) -> str:
+>>>>>>         return f"trio.Path({str(self)!r})"
+       
+    1:     stat = _wrap_method(pathlib.Path.stat)
+    1:     chmod = _wrap_method(pathlib.Path.chmod)
+    1:     exists = _wrap_method(pathlib.Path.exists)
+    1:     glob = _wrap_method_path_iterable(pathlib.Path.glob)
+    1:     rglob = _wrap_method_path_iterable(pathlib.Path.rglob)
+    1:     is_dir = _wrap_method(pathlib.Path.is_dir)
+    1:     is_file = _wrap_method(pathlib.Path.is_file)
+    1:     is_symlink = _wrap_method(pathlib.Path.is_symlink)
+    1:     is_socket = _wrap_method(pathlib.Path.is_socket)
+    1:     is_fifo = _wrap_method(pathlib.Path.is_fifo)
+    1:     is_block_device = _wrap_method(pathlib.Path.is_block_device)
+    1:     is_char_device = _wrap_method(pathlib.Path.is_char_device)
+    1:     if sys.version_info >= (3, 12):
+>>>>>>         is_junction = _wrap_method(pathlib.Path.is_junction)
+    1:     iterdir = _wrap_method_path_iterable(pathlib.Path.iterdir)
+    1:     lchmod = _wrap_method(pathlib.Path.lchmod)
+    1:     lstat = _wrap_method(pathlib.Path.lstat)
+    1:     mkdir = _wrap_method(pathlib.Path.mkdir)
+    1:     if sys.platform != "win32":
+>>>>>>         owner = _wrap_method(pathlib.Path.owner)
+>>>>>>         group = _wrap_method(pathlib.Path.group)
+    1:     if sys.platform != "win32" or sys.version_info >= (3, 12):
+>>>>>>         is_mount = _wrap_method(pathlib.Path.is_mount)
+    1:     readlink = _wrap_method_path(pathlib.Path.readlink)
+    1:     rename = _wrap_method_path(pathlib.Path.rename)
+    1:     replace = _wrap_method_path(pathlib.Path.replace)
+    1:     resolve = _wrap_method_path(pathlib.Path.resolve)
+    1:     rmdir = _wrap_method(pathlib.Path.rmdir)
+    1:     symlink_to = _wrap_method(pathlib.Path.symlink_to)
+    1:     hardlink_to = _wrap_method(pathlib.Path.hardlink_to)
+    1:     touch = _wrap_method(pathlib.Path.touch)
+    1:     unlink = _wrap_method(pathlib.Path.unlink)
+    1:     absolute = _wrap_method_path(pathlib.Path.absolute)
+    1:     expanduser = _wrap_method_path(pathlib.Path.expanduser)
+    1:     read_bytes = _wrap_method(pathlib.Path.read_bytes)
+    1:     read_text = _wrap_method(pathlib.Path.read_text)
+    1:     samefile = _wrap_method(pathlib.Path.samefile)
+    1:     write_bytes = _wrap_method(pathlib.Path.write_bytes)
+    1:     write_text = _wrap_method(pathlib.Path.write_text)
+    1:     if sys.version_info < (3, 12):
+    1:         link_to = _wrap_method(pathlib.Path.link_to)
+    1:     if sys.version_info >= (3, 13):
+>>>>>>         full_match = _wrap_method(pathlib.Path.full_match)
+       
+    1:     def as_uri(self) -> str:
+>>>>>>         return pathlib.Path.as_uri(self)
+       
+       
+    1: if Path.relative_to.__doc__:  # pragma: no branch
+    1:     Path.relative_to.__doc__ = Path.relative_to.__doc__.replace(" `..` ", " ``..`` ")
+       
+       
+    2: @final
+    1: class PosixPath(Path, pathlib.PurePosixPath):
+    1:     """An async :class:`pathlib.PosixPath` that executes blocking methods in :meth:`trio.to_thread.run_sync`."""
+       
+    1:     __slots__ = ()
+       
+    1:     _wrapped_cls: ClassVar[type[pathlib.Path]] = pathlib.PosixPath
+       
+       
+    2: @final
+    1: class WindowsPath(Path, pathlib.PureWindowsPath):
+    1:     """An async :class:`pathlib.WindowsPath` that executes blocking methods in :meth:`trio.to_thread.run_sync`."""
+       
+    1:     __slots__ = ()
+       
+    1:     _wrapped_cls: ClassVar[type[pathlib.Path]] = pathlib.WindowsPath

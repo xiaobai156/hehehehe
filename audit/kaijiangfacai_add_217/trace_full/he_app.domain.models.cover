@@ -1,0 +1,98 @@
+    1: from dataclasses import dataclass
+       
+       
+    2: class SourceDocument(str):
+    9:     def __new__(
+               cls,
+    1:         text: str,
+               *,
+    2:         source_url: str = "",
+    2:         fetch_kind: str = "legacy",
+    2:         document_type: str = "text",
+    2:         parent_url: str = "",
+    2:         record_id: str | None = None,
+    2:         authority_id: str = "legacy",
+    2:         document_id: str = "",
+           ):
+   25:         instance = super().__new__(cls, text)
+   25:         instance.source_url = source_url
+   25:         instance.fetch_kind = fetch_kind
+   25:         instance.document_type = document_type
+   25:         instance.parent_url = parent_url
+   25:         instance.record_id = record_id
+   25:         instance.authority_id = authority_id or "legacy"
+   25:         instance.document_id = document_id or instance.authority_id
+   25:         return instance
+       
+       
+    2: @dataclass(frozen=True)
+    1: class Site:
+    1:     name: str
+    1:     url: str
+    1:     pick: str
+    1:     browser: bool = False
+    1:     click_first: bool = False
+    1:     site_id: str = ""
+       
+       
+    2: @dataclass(frozen=True)
+    1: class Candidate:
+    1:     values: str
+    1:     line: str
+    1:     score: int
+    1:     order: int
+       
+       
+    2: @dataclass(frozen=True)
+    1: class PreviousInfo:
+    1:     display: str
+    1:     rankable: bool
+    1:     reason: str | None = None
+       
+       
+    2: @dataclass(frozen=True)
+    1: class FailureInfo:
+    1:     category: str
+    1:     reason: str
+       
+       
+    2: @dataclass(frozen=True)
+    1: class SiteRule:
+    1:     require_body_locator: bool = True
+    1:     note: str = ""
+    1:     anchor_text: str = ""
+    1:     latest_after_anchor: bool = False
+    1:     anchor_pick: str = ""
+    1:     allow_weak_kill_sum_keyword: bool = False
+    1:     allowed_fetch_kinds: tuple[str, ...] = ()
+       
+       
+    2: @dataclass(frozen=True)
+    1: class CandidateEvidence:
+    1:     site_id: str
+    1:     period: int
+    1:     values: tuple[str, ...]
+    1:     source_url: str
+    1:     document_id: str
+    1:     row_order: int
+    1:     raw_line: str
+    1:     article_id: str | None = None
+    1:     author: str = ""
+    1:     title: str = ""
+    1:     keyword: str = ""
+    1:     fetch_kind: str = "legacy"
+    1:     document_type: str = "text"
+    1:     parent_url: str = ""
+    1:     authority_id: str = "legacy"
+    1:     block_id: str = ""
+    1:     block_start: int = -1
+    1:     block_end: int = -1
+    1:     actual_position: int = -1
+       
+       
+    2: @dataclass(frozen=True)
+    1: class ParseResult:
+    1:     success: bool
+    1:     value: str | None = None
+    1:     evidence: tuple[CandidateEvidence, ...] = ()
+    1:     failure: FailureInfo | None = None

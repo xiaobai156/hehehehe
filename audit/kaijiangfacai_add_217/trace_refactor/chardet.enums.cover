@@ -1,0 +1,37 @@
+    1: """Enumerations for chardet."""
+       
+    1: from __future__ import annotations
+       
+    1: import enum
+       
+       
+    2: class EncodingEra(enum.IntFlag):
+    1:     """Bit flags representing encoding eras for filtering detection candidates."""
+       
+    1:     MODERN_WEB = 1
+    1:     LEGACY_ISO = 2
+    1:     LEGACY_MAC = 4
+    1:     LEGACY_REGIONAL = 8
+    1:     DOS = 16
+    1:     MAINFRAME = 32
+    1:     ALL = MODERN_WEB | LEGACY_ISO | LEGACY_MAC | LEGACY_REGIONAL | DOS | MAINFRAME
+       
+       
+    2: class LanguageFilter(enum.IntFlag):
+    1:     """Language filter flags for UniversalDetector (chardet 6.x API compat).
+       
+           Accepted but not used — our pipeline does not filter by language group.
+       
+           .. deprecated::
+               Retained only for backward compatibility with chardet 6.x callers.
+               Will be removed in a future major version.
+           """
+       
+    1:     CHINESE_SIMPLIFIED = 0x01
+    1:     CHINESE_TRADITIONAL = 0x02
+    1:     JAPANESE = 0x04
+    1:     KOREAN = 0x08
+    1:     NON_CJK = 0x10
+    1:     ALL = 0x1F
+    1:     CHINESE = CHINESE_SIMPLIFIED | CHINESE_TRADITIONAL
+    1:     CJK = CHINESE | JAPANESE | KOREAN

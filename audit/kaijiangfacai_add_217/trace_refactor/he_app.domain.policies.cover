@@ -1,0 +1,44 @@
+    1: import html
+    1: import re
+       
+       
+    1: def normalize_text(text: str) -> str:
+37829:     replacements = {
+ 1991:         "\r": "\n",
+ 1991:         "\xa0": " ",
+ 1991:         "\u3000": " ",
+ 1991:         "（": "(",
+ 1991:         "）": ")",
+ 1991:         "{": "(",
+ 1991:         "}": ")",
+ 1991:         "【": "[",
+ 1991:         "】": "]",
+ 1991:         "［": "[",
+ 1991:         "］": "]",
+ 1991:         "〔": "[",
+ 1991:         "〕": "]",
+ 1991:         "〖": "[",
+ 1991:         "〗": "]",
+ 1991:         "｛": "{",
+ 1991:         "｝": "}",
+ 1991:         "，": ",",
+ 1991:         "：": ":",
+ 1991:         "；": ";",
+           }
+41811:     for old, new in replacements.items():
+39820:         text = text.replace(old, new)
+ 1991:     return re.sub(r"\s+", " ", html.unescape(text)).strip()
+       
+       
+    1: def normalize_digit_text(text: str) -> str:
+ 1610:     return text.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+       
+       
+    1: def normalize_pick(pick: str) -> str:
+   21:     normalized = normalize_text(str(pick or "")).lower()
+   21:     if normalized in {"top", "顶部", "上", "上部", "前", "前面"}:
+>>>>>>         return "top"
+   21:     if normalized in {"bottom", "尾部", "底部", "下", "下部", "后", "后面"}:
+   21:         return "bottom"
+>>>>>>     return normalized or "bottom"
+       

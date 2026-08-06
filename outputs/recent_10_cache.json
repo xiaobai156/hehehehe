@@ -1,0 +1,1625 @@
+{
+  "base_period": 218,
+  "periods": 10,
+  "updated_at": "2026-08-06 00:54:00",
+  "sites": [
+    {
+      "id": "s132_ttss_79_yikao",
+      "name": "倚靠谁光",
+      "url": "https://a.ttss.vip/list.aspx?id=79&page=1",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "218": "09合"
+      },
+      "updated_at": "2026-08-06 00:54:00"
+    },
+    {
+      "id": "s133_ttss_79_chenyuan",
+      "name": "尘缘难尽",
+      "url": "https://a.ttss.vip/list.aspx?id=79&page=1",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "218": "08合"
+      },
+      "updated_at": "2026-08-06 00:54:00"
+    },
+    {
+      "id": "s134_ttss_79_qifeng",
+      "name": "棋逢对手",
+      "url": "https://a.ttss.vip/list.aspx?id=79&page=1",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "218": "06合"
+      },
+      "updated_at": "2026-08-06 00:54:00"
+    },
+    {
+      "id": "s001_topic_206535",
+      "name": "电子排版",
+      "url": "https://hbwtl.7xzry-2gul3-olawdt.xyz/topic/206535.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "01合",
+        "216": "09合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s002_topic_247357",
+      "name": "金财神",
+      "url": "https://otmglgaa.uf9twc-9v7sa-ccysbk.xyz:16677/topic/247357.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "06合",
+        "216": "05合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s003_topic_193293",
+      "name": "末学肤受",
+      "url": "https://vkrquo.xfbmz-7znxx-miaoej.xyz:16677/topic/193293.html",
+      "pick": "top",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "05合",
+        "216": "04合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s004_topic_225401",
+      "name": "默契神会",
+      "url": "https://269x6s.k4x2w-1o62c-peefnm.work/topic/225401.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "05合",
+        "216": "02合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s005_topic_453944",
+      "name": "朝三暮四",
+      "url": "https://269x6s.k4x2w-1o62c-peefnm.work/topic/453944.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "13合",
+        "216": "11合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s006_topic_255343",
+      "name": "亡魂丧魄",
+      "url": "https://sfch0f.2c6xk-l5fko-klefxa.work/topic/255343.html",
+      "pick": "top",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "09合",
+        "216": "09合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s007_topic_206633",
+      "name": "达罗环宇",
+      "url": "https://sfch0f.2c6xk-l5fko-klefxa.work/topic/206633.html",
+      "pick": "bottom",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "04合",
+        "216": "03合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s008_topic_250654",
+      "name": "一样一样",
+      "url": "https://bzdolgna.0115r-u1nk5-zioots.xyz:16677/topic/250654.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "10合",
+        "216": "05合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s009_topic_250869",
+      "name": "王中王第二版",
+      "url": "https://dhqjbz.uxec9-jxs3h-fomubo.work:16677/topic/250869.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "03合",
+        "216": "09合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s010_topic_250856",
+      "name": "射雕英雄",
+      "url": "https://dhqjbz.uxec9-jxs3h-fomubo.work:16677/topic/250856.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "04合",
+        "216": "01合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s012_topic_451629",
+      "name": "无適无莫",
+      "url": "https://e7rzi6.ic890-g0deq-lbrbfs.work/topic/451629.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "05合",
+        "216": "02合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s013_topic_226261",
+      "name": "盈把之木",
+      "url": "https://e7rzi6.ic890-g0deq-lbrbfs.work/topic/226261.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "12合",
+        "216": "07合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s014_topic_242281",
+      "name": "可怜盆栽",
+      "url": "https://fpcqttmm.ro008-hqz45-winmey.work:16677/topic/242281.html",
+      "pick": "top",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "10合",
+        "216": "05合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s015_topic_206515",
+      "name": "返回来个",
+      "url": "https://aq14f.2gdkh-2qrjm-hxaxji.xyz/topic/206515.html",
+      "pick": "top",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "07合",
+        "216": "02合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s016_topic_497780",
+      "name": "阳光明媚",
+      "url": "https://aq14f.2gdkh-2qrjm-hxaxji.xyz/topic/497780.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "11合",
+        "216": "04合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s017_topic_225131",
+      "name": "布天盖地",
+      "url": "https://aq14f.2gdkh-2qrjm-hxaxji.xyz/topic/225131.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "02合",
+        "216": "11合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s018_mm",
+      "name": "千祥云集",
+      "url": "https://mm.676626m.com:1888/bbs/8039",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "09合",
+        "216": "09合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s019_topic_324685",
+      "name": "无中生有",
+      "url": "https://tulprhfc.wghcb-bnmgm-hyymaz.work:16655/topic/324685.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "08合",
+        "216": "02合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s020_fklgrq",
+      "name": "学无止境",
+      "url": "https://fklgrq.h44e3-jrlpb-vmacil.work/#/users/116149",
+      "pick": "top",
+      "browser": false,
+      "click_first": true,
+      "fingerprint": {
+        "217": "09合",
+        "216": "08合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s022_topic_678629",
+      "name": "错过中原",
+      "url": "https://jogavu.6bl6s-ilo1w-yfnvvl.work:16677/topic/678629.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "06合",
+        "216": "02合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s023_topic_350518",
+      "name": "佳人旧梦",
+      "url": "https://zdwcig.iyo4d-81klf-udwkqg.work:16677/topic/350518.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "07合",
+        "216": "08合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s024_topic_350541",
+      "name": "南风过境",
+      "url": "https://zdwcig.iyo4d-81klf-udwkqg.work:16677/topic/350541.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "01合",
+        "216": "08合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s025_topic_435508",
+      "name": "胡说八道",
+      "url": "https://kulipur.l5paz-a0o8v-uozmmd.xyz:16677/topic/435508.html",
+      "pick": "top",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "11合",
+        "216": "05合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s026_topic_504960",
+      "name": "花花不语",
+      "url": "https://qnbezan.l1qb0-icltl-eyddev.xyz:16677/topic/504960.html",
+      "pick": "top",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "07合",
+        "216": "02合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s027_topic_436712",
+      "name": "古往今来",
+      "url": "https://pcfwjde.22zu6-81144-kdlkyf.xyz:16677/topic/436712.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "02合",
+        "216": "06合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s028_topic_349654",
+      "name": "归途他梦",
+      "url": "https://fptnapl.o7l2d-gr6ew-tvgvep.xyz:16677/topic/349654.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "05合",
+        "216": "07合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s029_topic_336887",
+      "name": "先人后己",
+      "url": "https://cpvqejp.avdja-la48l-xnsdva.xyz:16677/topic/336887.html",
+      "pick": "bottom",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "10合",
+        "216": "13合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s030_topic_351192",
+      "name": "勤勤恳恳",
+      "url": "https://yylxuru.en4hs-c1zt6-qzcdin.xyz:16677/topic/351192.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "12合",
+        "216": "02合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s031_topic_437742",
+      "name": "活泼开朗",
+      "url": "https://cxmdjok.8wtwc-boven-glylvt.xyz:16677/topic/437742.html",
+      "pick": "top",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "04合",
+        "216": "07合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s032_topic_309383",
+      "name": "踏雪无痕网",
+      "url": "https://ntvjzt.gau41-qu6jy-sotyug.work:16677/topic/309383.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "07合",
+        "216": "05合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s033_topic_309365",
+      "name": "烈日当头",
+      "url": "https://ntvjzt.gau41-qu6jy-sotyug.work:16677/topic/309365.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "02合",
+        "216": "08合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s034_topic_322671",
+      "name": "阳光记忆",
+      "url": "https://neciezht.h6r8g-z9l98-usthpy.xyz:16677/topic/322671.html",
+      "pick": "top",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "04合",
+        "216": "11合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s035_topic_417590",
+      "name": "清爽无敌",
+      "url": "https://dvglkfp.mueyy-uiuci-vtqiod.work:16677/topic/417590.html",
+      "pick": "top",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "11合",
+        "216": "08合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s036_topic_205722",
+      "name": "伤心人家",
+      "url": "https://dvglkfp.mueyy-uiuci-vtqiod.work:16677/topic/205722.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "13合",
+        "216": "11合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s037_topic_252205",
+      "name": "残丝断魂",
+      "url": "https://dvglkfp.mueyy-uiuci-vtqiod.work:16677/topic/252205.html",
+      "pick": "bottom",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "10合",
+        "216": "05合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s038_topic_455540",
+      "name": "风靡全球",
+      "url": "https://jldzuea.0xkqd-q7ng5-boerfb.xyz:16677/topic/455540.html",
+      "pick": "top",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "05合",
+        "216": "11合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s039_topic_455521",
+      "name": "久梦初醒",
+      "url": "https://jldzuea.0xkqd-q7ng5-boerfb.xyz:16677/topic/455521.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "03合",
+        "216": "06合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s040_topic_287375",
+      "name": "东方黑看",
+      "url": "https://cpwnjfs.bqxhy-prto9-idyylj.xyz:16677/topic/681950.html",
+      "pick": "top",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "04合",
+        "216": "03合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s041_topic_249367",
+      "name": "极度嚣张",
+      "url": "https://zbreipu.qlo2m-5j5sj-vamsdr.work:16644/topic/249367.html",
+      "pick": "top",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "02合",
+        "216": "10合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s042_topic_439183",
+      "name": "作茧自缚",
+      "url": "https://fzzmqscl.bdppk-lyf4y-teyajr.xyz:16677/topic/439183.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "11合",
+        "216": "08合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s043_topic_252215",
+      "name": "作舍道旁",
+      "url": "https://zpyaxwke.rp89b-fwko2-buexgv.xyz:16677/topic/252215.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "10合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s044_topic_445676",
+      "name": "百花齐放",
+      "url": "https://riyigxyt.e0tnb-692ww-xpgxma.xyz:16677/topic/445676.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "02合",
+        "216": "05合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s045_topic_272180",
+      "name": "官逼民反",
+      "url": "https://nyekjhvz.kr4ar-cgeaj-aekfox.xyz:16677/topic/272180.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "08合",
+        "216": "13合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s046_topic_178774",
+      "name": "杀神在世",
+      "url": "https://tjtoqvuf.t3eph-yoq80-znruxy.xyz:16677/topic/178774.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "11合",
+        "216": "06合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s047_topic_256745",
+      "name": "法无二门",
+      "url": "https://jnf52f.mjhbr-zqt9a-ofmjce.work/topic/256745.html",
+      "pick": "top",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "08合",
+        "216": "05合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s048_979363",
+      "name": "越反越爱",
+      "url": "https://979363.com.9795.in:1888/bbs/7646",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "07合",
+        "216": "12合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s049_topic_792936",
+      "name": "满面红光",
+      "url": "https://xoxtpupt.bvptr-i3mv8-pbjxin.work:17455/topic/792936.html",
+      "pick": "top",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "10合",
+        "216": "02合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s050_topic_680730",
+      "name": "画龙点睛",
+      "url": "https://sepfsazm.th2pfx-4s7mu-aafjnm.xyz:16677/topic/680730.html",
+      "pick": "top",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "04合",
+        "216": "09合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s051_topic_702074",
+      "name": "坐收其利",
+      "url": "https://qwpapph.el7s4-pbxnj-aemcbt.work:16677/topic/702074.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "09合",
+        "216": "09合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s052_topic_206523",
+      "name": "大田方是",
+      "url": "https://1w4ip.1to4y-eagok-yyyklr.xyz/topic/206523.html",
+      "pick": "top",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "10合",
+        "216": "03合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s054_topic_205701",
+      "name": "稳打稳中",
+      "url": "https://gboqrz.sm0a0-x9x2c-xyvjdr.work/topic/205701.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "07合",
+        "216": "10合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s055_topic_225617",
+      "name": "濯缨弹冠",
+      "url": "https://gboqrz.sm0a0-x9x2c-xyvjdr.work/topic/225617.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "05合",
+        "216": "06合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s056_topic_220982",
+      "name": "杏腮桃脸",
+      "url": "https://gboqrz.sm0a0-x9x2c-xyvjdr.work/topic/220982.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "09合",
+        "216": "08合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s057_topic_227386",
+      "name": "束身自修",
+      "url": "https://sfch0f.ky3r5-0b4c9-yudwqy.work/topic/227386.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "10合",
+        "216": "05合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s058_vkjwinyt",
+      "name": "通天",
+      "url": "https://vkjwinyt.fvpzl-4ijc5-cdcyle.xyz:16677/",
+      "pick": "top",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "12合",
+        "216": "10合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s059_topic_324760",
+      "name": "春风化雨",
+      "url": "https://cthvktrb.am9a6-vk0h6-lwbxab.xyz:16677/topic/324760.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "05合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s060_topic_589491",
+      "name": "赛码会",
+      "url": "https://ugtzszfp.ldpiz-8xhrd-wpkjkn.xyz:16677/topic/589491.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "04合",
+        "216": "07合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s061_fllxjy",
+      "name": "金手指",
+      "url": "https://fllxjy.m5jln-8kxct-vzvvzq.xyz:16677/",
+      "pick": "top",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "03合",
+        "216": "12合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s062_topic_349555",
+      "name": "悉悉索索",
+      "url": "https://estsghu.t7gsm-xl1x8-uohlna.xyz:16677/topic/349555.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "05合",
+        "216": "12合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s063_topic_283475",
+      "name": "怪咖少年",
+      "url": "https://ninbwa.7bmc7-mxwy9-uwkcem.xyz:16677/topic/283475.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "04合",
+        "216": "01合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s064_topic_268622",
+      "name": "兴高采烈",
+      "url": "https://uheeffd.c7t2g-0563t-gncviq.xyz:16677/topic/268622.html",
+      "pick": "bottom",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "10合",
+        "216": "06合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s065_topic_437721",
+      "name": "鸡飞蛋打",
+      "url": "https://knhlnvo.zvdsi-8qf2t-wchuxk.xyz:16677/topic/437721.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "216": "08合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s066_topic_463139",
+      "name": "春花烂漫",
+      "url": "https://pbihleo.n2t9e-qcqhn-arwwct.xyz:16677/topic/463139.html",
+      "pick": "top",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "07合",
+        "216": "10合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s067_topic_291095",
+      "name": "红花满地",
+      "url": "https://pwqviw.1tcpi-45qgo-qddfnk.work:16677/topic/291095.html",
+      "pick": "top",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "06合",
+        "216": "10合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s067_topic_680695",
+      "name": "杀敌一千",
+      "url": "https://gjyzpnkx.1r42a-pilbo-hfynxw.xyz:16677/topic/680695.html",
+      "pick": "top",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "02合",
+        "216": "04合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s068_topic_253482",
+      "name": "叹为观止",
+      "url": "https://znnpwd.p42g1-zqmsb-jjrsfg.xyz:16677/topic/253482.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "07合",
+        "216": "05合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s069_topic_682018",
+      "name": "山川落笔",
+      "url": "https://yqjfwqsc.1dayz-aetgp-kbjidr.xyz:16677/topic/682018.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "05合",
+        "216": "09合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s070_topic_246762",
+      "name": "一点红",
+      "url": "https://dwfoxsuz.ik1v5-stbjb-dsttyy.xyz:16677/topic/246762.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "11合",
+        "216": "03合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s071_topic_768615",
+      "name": "木南少年",
+      "url": "https://mfhfepu.ow55j-i5hbb-icetss.xyz/topic/768615.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "05合",
+        "216": "03合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s073_shuqhbq",
+      "name": "九肖杀",
+      "url": "https://shuqhbq.654o7-lyreu-rzcudi.xyz:16677/",
+      "pick": "top",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "02合",
+        "216": "01合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s074_topic_250885",
+      "name": "不变的心",
+      "url": "https://bzdolgna.0115r-u1nk5-zioots.xyz:16677/topic/250885.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "07合",
+        "216": "02合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s075_topic_250874",
+      "name": "朝夕相处",
+      "url": "https://bzdolgna.0115r-u1nk5-zioots.xyz:16677/topic/250874.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "09合",
+        "216": "02合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s076_topic_224258",
+      "name": "追根查源",
+      "url": "https://xoxtpupt.bvptr-i3mv8-pbjxin.work:17455/topic/224258.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "09合",
+        "216": "03合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s077_topic_233118",
+      "name": "油嘴滑舌",
+      "url": "https://cwdcaqzn.7mj0h-75k3q-cbuvqb.work:16677/topic/233118.html",
+      "pick": "top",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "09合",
+        "216": "04合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s078_topic_206798",
+      "name": "少私寡欲",
+      "url": "https://cwdcaqzn.7mj0h-75k3q-cbuvqb.work:16677/topic/206798.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "13合",
+        "216": "05合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s080_forums_15361483",
+      "name": "室内乐曲",
+      "url": "https://zcphjs.ce83x-ms2rz-orwude.work:12277/#/users/3751",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "05合",
+        "216": "06合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s081_users_2121",
+      "name": "潮流杀手",
+      "url": "https://zcphjs.ce83x-ms2rz-orwude.work:12277/#/users/2121",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "10合",
+        "216": "05合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s082_users_3722",
+      "name": "唯一电影",
+      "url": "https://zcphjs.ce83x-ms2rz-orwude.work:12277/#/users/3722",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "05合",
+        "216": "07合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s083_topic_242261",
+      "name": "随便盆栽",
+      "url": "https://nrhvym.aec88-ufp0n-pvfuxp.work:16677/topic/242261.html",
+      "pick": "top",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "03合",
+        "216": "07合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s085_kcvpleh",
+      "name": "女人味",
+      "url": "https://kcvpleh.cu22v-734rk-tdzayt.xyz:16677/",
+      "pick": "top",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "05合,06合",
+        "216": "01合,05合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s086_aa_959787m_136",
+      "name": "萌萌",
+      "url": "https://aa.959787m.com:1888/bbs/136.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "07合",
+        "216": "01合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s087_enpcjg",
+      "name": "嫦娥奔月",
+      "url": "https://enpcjg.4qnp3-wmf88-gaewaj.xyz:16677/",
+      "pick": "bottom",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "13合",
+        "216": "06合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s088_mm_737799b_art_8129",
+      "name": "仙人指路",
+      "url": "https://mm.737799b.com:1888/art/8129",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "05合",
+        "216": "04合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s090_667755_gsb_022",
+      "name": "世外桃源",
+      "url": "https://667755.xn--q9ja6j.xn--q9jyb4c/gsb/056.html",
+      "pick": "bottom",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "12合",
+        "216": "01合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s091_2_www39169b_gsbl_s01",
+      "name": "一纸乱言",
+      "url": "https://2.www39169b.com:888/gsbl/s01.html",
+      "pick": "bottom",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "01合",
+        "216": "06合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s092_a_995546_gsb_aspx_id_amjyb036",
+      "name": "囫囵吞枣",
+      "url": "https://dh1.717121b.com:8443/amjyb/amjyb036.html",
+      "pick": "bottom",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "07合",
+        "216": "04合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s093_a_909922_article_aspx_id_3694545",
+      "name": "亮劍",
+      "url": "https://a.909922.com/list.Aspx?id=209",
+      "pick": "top",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "13合",
+        "216": "05合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s094_topic_727508",
+      "name": "偷天换日",
+      "url": "https://wmdhoki.6su07-7lpw6-gudkzl.xyz:16677/topic/727508.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "06合",
+        "216": "01合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s095_kk_212557a_art_zhuanqu_8149",
+      "name": "我要宝马",
+      "url": "https://kk.212557a.com:1888/art_zhuanqu/8149.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "04合",
+        "216": "08合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s096_topic_206671",
+      "name": "摇尾求食",
+      "url": "https://mjnrsqwu.c3kef-jhnm5-opjvvz.xyz:16677/topic/206671.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "05合",
+        "216": "03合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s097_topic_250886",
+      "name": "东益散人",
+      "url": "https://dhqjbz.uxec9-jxs3h-fomubo.work:16677/topic/250886.html",
+      "pick": "bottom",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "04合",
+        "216": "05合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s100_topic_205318",
+      "name": "没名字一",
+      "url": "https://myvvqq.30dok-2s9fd-bibfmg.work/topic/205318.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "05合",
+        "216": "03合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s102_979585_bbs_160",
+      "name": "致富一",
+      "url": "https://979585.com.9795.in:1888/bbs/160.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "02合",
+        "216": "04合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s103_979585_bbs_139",
+      "name": "致富二",
+      "url": "https://979585.com.9795.in:1888/bbs/139.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "03合",
+        "216": "06合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s105_topic_213777",
+      "name": "丰墙硗下",
+      "url": "https://mjnrsqwu.c3kef-jhnm5-opjvvz.xyz:16677/topic/213777.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "03合",
+        "216": "07合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s106_topic_281519",
+      "name": "怒气冲冲",
+      "url": "https://huqtzej.vvlq2-j4i8n-lisghq.xyz:16677/topic/281519.html",
+      "pick": "bottom",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "11合",
+        "216": "05合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s107_topic_453800",
+      "name": "挂牌",
+      "url": "https://cvbvre.l52u8-1i1al-hwchiz.xyz:16677/topic/453800.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "01合",
+        "216": "05合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s109_topic_222783",
+      "name": "如蚁慕膻",
+      "url": "https://sfch0f.8qf8z-uqq0p-brtstz.work/topic/222783.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "12合",
+        "216": "09合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s110_aa_676595a",
+      "name": "一夫当关",
+      "url": "https://aa.676595a.com:1888/",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "02合",
+        "216": "06合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s111_mm_737799b_art_gsb_8149",
+      "name": "小诸葛",
+      "url": "https://mm.737799b.com:1888/art_gsb/8149",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "09合",
+        "216": "09合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s112_dd_62782b_bbs_10699",
+      "name": "师出长安",
+      "url": "https://dd.62782b.com:1888/bbs/10699",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "13合",
+        "216": "07合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s113_cc_62782b_bbs_10745",
+      "name": "冷静文人",
+      "url": "https://cc.62782b.com:1888/bbs/10745",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "08合",
+        "216": "02合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s114_dd_636396m_bbs_10695",
+      "name": "指路",
+      "url": "https://dd.636396m.com:1888/bbs/10695",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "05合",
+        "216": "03合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s116_topic_440127",
+      "name": "没名字五",
+      "url": "https://cdlmrp.etrum-l5k1c-wcasxz.work:16677/topic/440127.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "04合",
+        "216": "10合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s118_topic_1024655",
+      "name": "和风细雨",
+      "url": "https://mxiscni.nkh6s-vfni4-lwgfvw.xyz:16677/topic/257907.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "07合",
+        "216": "06合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s119_topic_1024654",
+      "name": "新人旧梦",
+      "url": "https://mxiscni.nkh6s-vfni4-lwgfvw.xyz:16677/topic/257907.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "04合",
+        "216": "01合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s122_kk_336868m_art_zhuanqu_8039",
+      "name": "连连爆中",
+      "url": "https://kk.336868m.com:1888/art_zhuanqu/8039.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "07合",
+        "216": "06合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s123_kk_336868m_art_zhuanqu_8149",
+      "name": "没名字六",
+      "url": "https://kk.336868m.com:1888/art_zhuanqu/8149.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "10合",
+        "216": "05合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s124_22_868393c_art_zhuanqu_8129",
+      "name": "月落乌江",
+      "url": "https://22.868393c.com:1888/art_zhuanqu/8129.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "04合",
+        "216": "08合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s125_kk_375737m",
+      "name": "金多宝",
+      "url": "https://kk.375737m.com:1888/",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "09合",
+        "216": "02合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s126_topic_930870",
+      "name": "流浪高手",
+      "url": "https://opfeal.zbwno-faau4-zilwkd.xyz:16677/topic/930870.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "09合",
+        "216": "02合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s117_993345_gsb_025",
+      "name": "八仙过海",
+      "url": "https://993345.com/gsb.aspx?id=025",
+      "pick": "bottom",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "04合",
+        "216": "03合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s098_topic_227257",
+      "name": "雷锋第一版",
+      "url": "https://dvglkfp.mueyy-uiuci-vtqiod.work:16677/topic/227257.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "03合",
+        "216": "08合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s099_topic_464275",
+      "name": "雷锋第二版",
+      "url": "https://dvglkfp.mueyy-uiuci-vtqiod.work:16677/topic/464275.html",
+      "pick": "top",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "04合",
+        "216": "05合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s101_topic_274142",
+      "name": "没名字二",
+      "url": "https://myvvqq.30dok-2s9fd-bibfmg.work/topic/274142.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "10合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s104_topic_245375",
+      "name": "号令如山",
+      "url": "https://mjnrsqwu.c3kef-jhnm5-opjvvz.xyz:16677/topic/245375.html",
+      "pick": "bottom",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "10合",
+        "216": "05合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s108_topic_1024380",
+      "name": "命中劫",
+      "url": "https://xmdrbud.eqpr2-6tpvi-pjqztv.xyz:16677/",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "10合",
+        "216": "05合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s115_topic_440075",
+      "name": "没名字四",
+      "url": "https://cdlmrp.etrum-l5k1c-wcasxz.work:16677/topic/440075.html",
+      "pick": "bottom",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "12合",
+        "216": "06合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s121_topic_224339",
+      "name": "亡羊补牢",
+      "url": "https://xoxtpupt.bvptr-i3mv8-pbjxin.work:17455/topic/224339.html",
+      "pick": "top",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "05合",
+        "216": "10合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s129_topic_732154",
+      "name": "大家发",
+      "url": "https://ssytmks.kcyub-abvtn-uvalbe.xyz:16677/topic/732154.html",
+      "pick": "top",
+      "browser": true,
+      "click_first": false,
+      "fingerprint": {
+        "217": "11合",
+        "216": "02合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s130_manager_6a1f8c61b67e3ff2e4c4ecbb",
+      "name": "以爱之名",
+      "url": "https://wigrzse.3acpt-tc9xa-kzxasm.xyz:29444/article/manager/6a1f8c61b67e3ff2e4c4ecbb?url=pg",
+      "pick": "bottom",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "12合",
+        "216": "05合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    },
+    {
+      "id": "s131_kjfc_234432",
+      "name": "开奖发财",
+      "url": "https://156.225.88.144:12098/#234432",
+      "pick": "bottom",
+      "browser": false,
+      "click_first": false,
+      "fingerprint": {
+        "217": "06合"
+      },
+      "updated_at": "2026-08-05 18:54:31"
+    }
+  ],
+  "errors": []
+}
