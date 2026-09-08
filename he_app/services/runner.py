@@ -241,7 +241,7 @@ def run(args: argparse.Namespace) -> int:
     cache_updated = False
     if not args.no_fingerprint_cache_sync:
         try:
-            if cache_update_allowed(success_count, total_sites):
+            if args.retry_failures or cache_update_allowed(success_count, total_sites):
                 update_recent_cache_from_outcomes(
                     fingerprint_cache_path,
                     sites,
