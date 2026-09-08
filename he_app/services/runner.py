@@ -3,6 +3,7 @@ import re
 import sys
 import time
 import warnings
+from contextlib import ExitStack
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from threading import Lock
@@ -26,11 +27,13 @@ from he_app.observability.progress import (
     format_progress_prefix,
 )
 from he_app.services.crawler import (
+    build_mirror_url_map,
     print_outcome,
     scrape_parallel_site,
 )
 from he_app.storage.atomic_write import (
-    commit_text_transaction,
+    commit_text_transaction_unlocked,
+    exclusive_path_lock,
 )
 from he_app.storage.recent_cache import (
     cache_update_allowed,
@@ -83,6 +86,22 @@ def consume_site_future(future, site: Site, fallback_index: int):
     except Exception as exc:
         return fallback_index, site, None, "", f"{type(exc).__name__}: {exc}", [], None, 0.0
 
+def _normalize_legacy_failures(text: str, sites: list[Site]) -> str:
+    if not text or FAILURE_SITE_ID_RE.search(text):
+        return text
+    resolved = []
+    for record in re.split(r"\r?\n\r?\n", text.lstrip("\ufeff")):
+        if not record.strip():
+            continue
+        name = re.search(r"失败\s+(.+?)\s+https?://", record)
+        url = re.search(r"(https?://\S+)", record)
+        pick = re.search(r"方向:\s*(\w+)", record)
+        candidates = [s for s in sites if name and url and pick and s.name == name.group(1).strip() and s.url == url.group(1) and s.pick == pick.group(1)]
+        if len(candidates) != 1:
+            raise SystemExit(f"失败TXT记录无法唯一匹配站点: {record.splitlines()[0]}")
+        resolved.append(re.sub(r"(失败\s+)", rf"\1{candidates[0].site_id} 站点ID: {candidates[0].site_id} ", record, count=1))
+    return "\n\n".join(resolved)
+
 
 def run(args: argparse.Namespace) -> int:
     if args.period < 1:
@@ -105,6 +124,7 @@ def run(args: argparse.Namespace) -> int:
     sites = load_sites(sites_path)
     if args.retry_failures:
         failure_text = fail_path.read_text(encoding="utf-8-sig") if fail_path.exists() else ""
+        failure_text = _normalize_legacy_failures(failure_text, sites)
         recorded_periods = {
             int(value) for value in re.findall(r"期数:\s*(\d+)", failure_text)
         }
@@ -124,7 +144,8 @@ def run(args: argparse.Namespace) -> int:
         args.preserve_unconfigured_cache_sites = True
     outcomes: dict[int, tuple[Site, str | None, str, str | None, list[str], str | None]] = {}
     all_sites = list(enumerate(sites))
-    host_locks = build_host_locks(sites)
+    mirror_url_map = build_mirror_url_map(sites, args.mirror_limit)
+    host_locks = build_host_locks(sites, mirror_url_map)
     workers = max(1, args.workers)
     fingerprint_cache_path = Path(args.fingerprint_cache).resolve()
 
@@ -145,6 +166,7 @@ def run(args: argparse.Namespace) -> int:
             timeout,
             show_browser,
             host_locks=locks,
+            mirror_urls=mirror_url_map.get(index, []),
             browser_pool=pool,
         )
         return (*outcome, time.perf_counter() - started_at)
@@ -203,39 +225,33 @@ def run(args: argparse.Namespace) -> int:
     success_lines, fail_lines, ranking_values, failure_categories = build_current_only_results(
         sites, outcomes, args.period
     )
-    existing_success = ""
-    if args.append_success:
-        existing_success = (
-            success_path.read_text(encoding="utf-8-sig") if success_path.exists() else ""
-        )
-        success_output = merge_success_output_lines(existing_success, success_lines)
-    else:
-        success_output = build_success_output_lines(success_lines, ranking_values)
-    success_text = "\n".join(success_output) + ("\n" if success_output else "")
-    if args.append_success:
+    with ExitStack() as output_locks:
+        for path in sorted({success_path, fail_path}, key=lambda p: str(p).casefold()):
+            output_locks.enter_context(exclusive_path_lock(path))
+        existing_success = success_path.read_text(encoding="utf-8-sig") if success_path.exists() else ""
+        if args.append_success:
+            success_output = merge_success_output_lines(existing_success, success_lines)
+        else:
+            success_output = build_success_output_lines(success_lines, ranking_values)
+        success_text = "\n".join(success_output) + ("\n" if success_output else "")
         existing_failure = fail_path.read_text(encoding="utf-8-sig") if fail_path.exists() else ""
-        successful_site_ids = {
-            site.site_id
-            for site, result, _detail, _error, _rank_values, _previous_reason in outcomes.values()
-            if result
-        }
-        failure_output = merge_failure_output(
-            existing_failure,
-            fail_lines,
-            successful_site_ids,
-        )
-    else:
-        failure_output = format_failure_output(fail_lines, failure_categories)
-    changes: dict[Path, tuple[str, str] | None] = {
-        fail_path: (failure_output, "utf-8-sig") if failure_output else None,
-    }
-    success_unchanged = (
-        args.append_success
-        and success_text.splitlines() == existing_success.splitlines()
-    )
-    if not success_unchanged:
-        changes[success_path] = (success_text, "utf-8-sig")
-    commit_text_transaction(changes)
+        if args.append_success:
+            successful_site_ids = {
+                site.site_id
+                for site, result, _detail, _error, _rank_values, _previous_reason in outcomes.values()
+                if result
+            }
+            failure_output = merge_failure_output(
+                existing_failure,
+                fail_lines,
+                successful_site_ids,
+            )
+        else:
+            failure_output = format_failure_output(fail_lines, failure_categories)
+        changes = {fail_path: (failure_output, "utf-8-sig") if failure_output else None}
+        if not (args.append_success and success_text.splitlines() == existing_success.splitlines()):
+            changes[success_path] = (success_text, "utf-8-sig")
+        commit_text_transaction_unlocked(changes)
 
     cache_update_error: Exception | None = None
     cache_updated = False

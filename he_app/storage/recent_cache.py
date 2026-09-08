@@ -302,12 +302,7 @@ def _record_recent_cache_failures_locked(
 
     cache = load_recent_cache(path)
     validate_recent_cache_identity(cache, sites, allow_configured_subset=True)
-    configured_keys = {
-        key
-        for site in sites
-        for key in (cache_site_key(site), site.url)
-        if key
-    }
+    configured_keys = {cache_site_key(site) for site in sites if cache_site_key(site)}
     failed_sites = {
         cache_site_key(site): (site, outcomes.get(index, (site, None, "", "未执行", [], None)))
         for index, site in enumerate(sites)
@@ -319,7 +314,6 @@ def _record_recent_cache_failures_locked(
         if not isinstance(item, dict):
             continue
         item_id = str(item.get("id", "")).strip()
-        item_url = str(item.get("url", "")).strip()
         failed = failed_sites.get(item_id)
         if failed is not None:
             kept = dict(item)
@@ -339,7 +333,6 @@ def _record_recent_cache_failures_locked(
         if not isinstance(item, dict)
         or not (
             str(item.get("id", "")).strip() in configured_keys
-            or str(item.get("url", "")).strip() in configured_keys
         )
     ]
     kept_errors.extend(
