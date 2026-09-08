@@ -87,11 +87,15 @@ def consume_site_future(future, site: Site, fallback_index: int):
         return fallback_index, site, None, "", f"{type(exc).__name__}: {exc}", [], None, 0.0
 
 def _normalize_legacy_failures(text: str, sites: list[Site]) -> str:
-    if not text or FAILURE_SITE_ID_RE.search(text):
+    if not text:
         return text
     resolved = []
-    for record in re.split(r"\r?\n\r?\n", text.lstrip("\ufeff")):
+    body = text.lstrip("\ufeff").split("\n\n失败分类统计", 1)[0]
+    for record in re.split(r"\r?\n\r?\n", body):
         if not record.strip():
+            continue
+        if FAILURE_SITE_ID_RE.search(record):
+            resolved.append(record)
             continue
         name = re.search(r"失败\s+(.+?)\s+https?://", record)
         url = re.search(r"(https?://\S+)", record)
@@ -99,7 +103,7 @@ def _normalize_legacy_failures(text: str, sites: list[Site]) -> str:
         candidates = [s for s in sites if name and url and pick and s.name == name.group(1).strip() and s.url == url.group(1) and s.pick == pick.group(1)]
         if len(candidates) != 1:
             raise SystemExit(f"失败TXT记录无法唯一匹配站点: {record.splitlines()[0]}")
-        resolved.append(re.sub(r"(失败\s+)", rf"\1{candidates[0].site_id} 站点ID: {candidates[0].site_id} ", record, count=1))
+        resolved.append(record.replace(url.group(1), f"站点ID: {candidates[0].site_id} {url.group(1)}", 1))
     return "\n\n".join(resolved)
 
 
@@ -125,8 +129,11 @@ def run(args: argparse.Namespace) -> int:
     if args.retry_failures:
         failure_text = fail_path.read_text(encoding="utf-8-sig") if fail_path.exists() else ""
         failure_text = _normalize_legacy_failures(failure_text, sites)
+        period_values = re.findall(r"期数:\s*(\d+)", failure_text)
+        if not period_values:
+            raise SystemExit("失败TXT格式无有效期数记录")
         recorded_periods = {
-            int(value) for value in re.findall(r"期数:\s*(\d+)", failure_text)
+            int(value) for value in period_values
         }
         if recorded_periods and recorded_periods != {args.period}:
             raise SystemExit(
