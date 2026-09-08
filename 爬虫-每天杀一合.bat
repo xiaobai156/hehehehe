@@ -39,7 +39,10 @@ for /f "delims=0123456789" %%A in ("%PERIOD%") do (
 
 echo.
 echo Running period %PERIOD% ...
-%PY_CMD% he_crawler.py --period %PERIOD%
+choice /c NF /n /m "抓取模式：N=全站，F=仅重抓失败TXT站点："
+set "RUN_MODE="
+if errorlevel 2 set "RUN_MODE=--retry-failures"
+%PY_CMD% he_crawler.py --period %PERIOD% %RUN_MODE%
 set "EXIT_CODE=%ERRORLEVEL%"
 
 echo.
