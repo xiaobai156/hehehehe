@@ -301,7 +301,7 @@ def _record_recent_cache_failures_locked(
     """Record failures without advancing the cache base or successful fingerprints."""
 
     cache = load_recent_cache(path)
-        validate_recent_cache_identity(cache, sites, allow_configured_subset=True)
+    validate_recent_cache_identity(cache, sites, allow_configured_subset=True)
     configured_keys = {
         key
         for site in sites
