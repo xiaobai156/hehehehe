@@ -23,11 +23,13 @@ def host_key(url: str) -> str:
     return parsed.netloc or url
 
 
-def build_host_locks(sites: list[Site], mirror_url_map: dict[int, list[str]]) -> dict[str, Lock]:
-    hosts = {host_key(site.url) for site in sites}
-    for urls in mirror_url_map.values():
-        hosts.update(host_key(url) for url in urls)
-    return {host: Lock() for host in hosts}
+def build_host_locks(
+    sites: list[Site], mirror_url_map: dict[int, list[str]] | None = None
+) -> dict[str, Lock]:
+    urls = [site.url for site in sites]
+    if mirror_url_map:
+        urls.extend(url for mirrors in mirror_url_map.values() for url in mirrors)
+    return {host_key(url): Lock() for url in urls}
 
 
 def create_session(host_locks: dict[str, Lock] | None = None) -> requests.Session:
@@ -190,12 +192,12 @@ def decode_response_bytes(data: bytes, content_type: str = "") -> str:
     for encoding in parse_charset_candidates(content_type):
         try:
             return data.decode(encoding)
-        except UnicodeDecodeError:
+        except UnicodeDecodeError:  # noqa: PERF203 - ordered decode fallback
             continue
     for encoding in ("utf-8", "gb18030", "big5"):
         try:
             return data.decode(encoding)
-        except UnicodeDecodeError:
+        except UnicodeDecodeError:  # noqa: PERF203 - ordered decode fallback
             continue
     return data.decode("utf-8", errors="ignore")
 
@@ -206,4 +208,3 @@ def parse_charset_candidates(content_type: str) -> list[str]:
     if match:
         candidates.append(match.group(1))
     return candidates
-

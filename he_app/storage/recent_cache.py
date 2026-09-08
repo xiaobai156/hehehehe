@@ -5,6 +5,7 @@ from pathlib import Path
 from he_app.domain.errors import FingerprintCacheError
 from he_app.domain.models import Site
 from he_app.storage.atomic_write import exclusive_path_lock, write_text_atomic_unlocked
+from he_app.validation.period import is_valid_sum_value
 
 
 Outcome = tuple[Site, str | None, str, str | None, list[str], str | None]
@@ -56,6 +57,105 @@ def load_recent_cache(path: Path) -> dict:
     return data
 
 
+def _cached_site_identity(item: dict, index: int) -> Site:
+    required = {"id", "name", "url", "pick", "browser", "click_first", "fingerprint"}
+    if not required.issubset(item):
+        raise FingerprintCacheError(f"指纹缓存第{index}个站点字段不完整")
+    if not all(isinstance(item[key], str) for key in ("id", "name", "url", "pick")):
+        raise FingerprintCacheError(f"指纹缓存第{index}个站点文本字段类型错误")
+    if type(item["browser"]) is not bool or type(item["click_first"]) is not bool:
+        raise FingerprintCacheError(f"指纹缓存第{index}个站点布尔字段类型错误")
+    value_count = item.get("value_count", 1)
+    if type(value_count) is not int or value_count not in {1, 2}:
+        raise FingerprintCacheError(f"指纹缓存第{index}个站点 value_count 必须为1或2")
+    top_period_exception = item.get("top_period_exception")
+    if top_period_exception is not None and (
+        type(top_period_exception) is not int or top_period_exception < 1
+    ):
+        raise FingerprintCacheError(f"指纹缓存第{index}个站点 top_period_exception 非法")
+    if not item["id"].strip() or not item["name"].strip() or not item["url"].strip():
+        raise FingerprintCacheError(f"指纹缓存第{index}个站点身份为空")
+    if item["pick"] not in {"top", "bottom"}:
+        raise FingerprintCacheError(f"指纹缓存第{index}个站点方向非法")
+    return Site(
+        item["name"].strip(),
+        item["url"].strip(),
+        item["pick"],
+        item["browser"],
+        item["click_first"],
+        item["id"].strip(),
+        value_count,
+        top_period_exception,
+    )
+
+
+def validate_recent_cache_identity(
+    cache: dict,
+    sites: list[Site],
+    allow_configured_subset: bool = False,
+) -> None:
+    raw_sites = cache.get("sites", [])
+    if not raw_sites and int(cache.get("base_period", 0) or 0) == 0:
+        return
+    cached_sites: list[Site] = []
+    used_ids: set[str] = set()
+    base_period = int(cache.get("base_period", 0) or 0)
+    periods = int(cache.get("periods", 0) or 0)
+    minimum_period = base_period - periods + 1
+    for index, item in enumerate(raw_sites, start=1):
+        if not isinstance(item, dict):
+            raise FingerprintCacheError(f"指纹缓存第{index}个站点不是对象")
+        cached_site = _cached_site_identity(item, index)
+        if cached_site.site_id in used_ids:
+            raise FingerprintCacheError(f"指纹缓存包含重复站点ID: {cached_site.site_id}")
+        used_ids.add(cached_site.site_id)
+        raw_fingerprint = item["fingerprint"]
+        if not isinstance(raw_fingerprint, dict):
+            raise FingerprintCacheError(f"指纹缓存第{index}个站点 fingerprint 不是对象")
+        for raw_period, raw_value in raw_fingerprint.items():
+            if not str(raw_period).isdigit() or not isinstance(raw_value, str):
+                raise FingerprintCacheError(f"指纹缓存第{index}个站点存在非法期数或合数")
+            current_period = int(raw_period)
+            values = raw_value.split(",")
+            if not minimum_period <= current_period <= base_period:
+                raise FingerprintCacheError(
+                    f"指纹缓存第{index}个站点包含窗口外期数: {current_period}"
+                )
+            if (
+                len(values) != cached_site.value_count
+                or len(set(values)) != len(values)
+                or not all(is_valid_sum_value(value) for value in values)
+            ):
+                raise FingerprintCacheError(
+                    f"指纹缓存第{index}个站点{current_period}期合数非法: {raw_value}"
+                )
+        cached_sites.append(cached_site)
+
+    if allow_configured_subset:
+        cached_by_id = {site.site_id: site for site in cached_sites}
+        missing_or_changed = [
+            site.site_id for site in sites if cached_by_id.get(site.site_id) != site
+        ]
+        if not missing_or_changed:
+            return
+        detail = missing_or_changed[0]
+    else:
+        if cached_sites == sites:
+            return
+        mismatch = next(
+            (
+                index
+                for index, (cached, configured) in enumerate(
+                    zip(cached_sites, sites, strict=False), start=1
+                )
+                if cached != configured
+            ),
+            min(len(cached_sites), len(sites)) + 1,
+        )
+        detail = f"第{mismatch}条"
+    raise FingerprintCacheError(f"指纹缓存与当前配置的数量、顺序或站点身份不一致: {detail}")
+
+
 def trim_fingerprint(
     fingerprint: dict[str, str],
     periods: int,
@@ -83,6 +183,7 @@ def _update_recent_cache_locked(
     preserve_unconfigured_sites: bool,
 ) -> None:
     cache = load_recent_cache(path)
+    validate_recent_cache_identity(cache, sites, preserve_unconfigured_sites)
     payload = build_recent_cache_payload(
         cache, sites, outcomes, period, periods, preserve_unconfigured_sites
     )
@@ -103,7 +204,7 @@ def build_recent_cache_payload(
     for item in cache.get("sites", []):
         if not isinstance(item, dict):
             continue
-        for key in (str(item.get("id", "")).strip(), str(item.get("url", "")).strip()):
+        for key in (str(item.get("id", "")).strip(),):
             if key:
                 existing_by_key[key] = item
 
@@ -112,8 +213,8 @@ def build_recent_cache_payload(
     now = time.strftime("%Y-%m-%d %H:%M:%S")
     seen_keys: set[str] = set()
     for index, site in enumerate(sites):
-        previous = existing_by_key.get(cache_site_key(site)) or existing_by_key.get(site.url) or {}
-        seen_keys.update((cache_site_key(site), site.url))
+        previous = existing_by_key.get(cache_site_key(site)) or {}
+        seen_keys.add(cache_site_key(site))
         previous_fingerprint = previous.get("fingerprint", {}) if isinstance(previous.get("fingerprint"), dict) else {}
         fingerprint = trim_fingerprint(
             {str(key): str(value) for key, value in previous_fingerprint.items()}, periods, base_period
@@ -128,29 +229,36 @@ def build_recent_cache_payload(
             fingerprint = trim_fingerprint(fingerprint, periods, base_period)
         elif period_in_window:
             fingerprint.pop(str(period), None)
-        if fingerprint:
-            next_sites.append(
-                {
-                    "id": cache_site_key(site),
-                    "name": site.name,
-                    "url": site.url,
-                    "pick": site.pick,
-                    "browser": site.browser,
-                    "click_first": site.click_first,
-                    "fingerprint": fingerprint,
-                    "updated_at": now,
-                }
-            )
+        cache_item = {
+            "id": cache_site_key(site),
+            "name": site.name,
+            "url": site.url,
+            "pick": site.pick,
+            "browser": site.browser,
+            "click_first": site.click_first,
+            "fingerprint": fingerprint,
+            "updated_at": now,
+        }
+        if site.value_count != 1:
+            cache_item["value_count"] = site.value_count
+        if site.top_period_exception is not None:
+            cache_item["top_period_exception"] = site.top_period_exception
+        next_sites.append(cache_item)
         if not result or not fingerprint:
             next_errors.append(_failure_entry(site, (site, result, detail, error, rank_values, previous_reason), period, now))
 
     if preserve_unconfigured_sites:
+        configured_by_id = {
+            str(item.get("id", "")).strip(): item for item in next_sites
+        }
+        ordered_sites: list[dict] = []
         for item in cache.get("sites", []):
             if not isinstance(item, dict):
                 continue
             item_id = str(item.get("id", "")).strip()
-            item_url = str(item.get("url", "")).strip()
-            if item_id in seen_keys or item_url in seen_keys:
+            replacement = configured_by_id.pop(item_id, None)
+            if replacement is not None:
+                ordered_sites.append(replacement)
                 continue
             fingerprint = item.get("fingerprint", {}) if isinstance(item.get("fingerprint"), dict) else {}
             trimmed = trim_fingerprint(
@@ -159,7 +267,20 @@ def build_recent_cache_payload(
             if trimmed:
                 kept = dict(item)
                 kept["fingerprint"] = trimmed
-                next_sites.append(kept)
+                ordered_sites.append(kept)
+        ordered_sites.extend(
+            item for item in next_sites if str(item.get("id", "")).strip() in configured_by_id
+        )
+        next_sites = ordered_sites
+        next_errors = [
+            item
+            for item in cache.get("errors", [])
+            if not isinstance(item, dict)
+            or not (
+                str(item.get("id", "")).strip() in seen_keys
+                or str(item.get("url", "")).strip() in seen_keys
+            )
+        ] + next_errors
 
     payload = {
         "base_period": base_period,
@@ -180,6 +301,7 @@ def _record_recent_cache_failures_locked(
     """Record failures without advancing the cache base or successful fingerprints."""
 
     cache = load_recent_cache(path)
+        validate_recent_cache_identity(cache, sites, allow_configured_subset=True)
     configured_keys = {
         key
         for site in sites
@@ -191,9 +313,6 @@ def _record_recent_cache_failures_locked(
         for index, site in enumerate(sites)
         if not outcomes.get(index, (site, None, "", "未执行", [], None))[1]
     }
-    failed_sites_by_url = {
-        site.url: value for site, value in failed_sites.values() if site.url
-    }
 
     kept_sites: list[dict] = []
     for item in cache.get("sites", []):
@@ -201,7 +320,7 @@ def _record_recent_cache_failures_locked(
             continue
         item_id = str(item.get("id", "")).strip()
         item_url = str(item.get("url", "")).strip()
-        failed = failed_sites.get(item_id) or failed_sites_by_url.get(item_url)
+        failed = failed_sites.get(item_id)
         if failed is not None:
             kept = dict(item)
             fingerprint = item.get("fingerprint", {})
@@ -256,10 +375,3 @@ def update_recent_cache_from_outcomes(
 ) -> None:
     with exclusive_path_lock(path):
         _update_recent_cache_locked(path, sites, outcomes, period, periods, preserve_unconfigured_sites)
-
-
-# Compatibility names used by the existing command-line programs during migration.
-load_duplicate_fingerprint_cache = load_recent_cache
-trim_duplicate_fingerprint = trim_fingerprint
-update_duplicate_fingerprint_cache_from_outcomes = update_recent_cache_from_outcomes
-_update_duplicate_fingerprint_cache_from_outcomes_locked = _update_recent_cache_locked
