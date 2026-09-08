@@ -1,4 +1,5 @@
 import argparse
+import re
 import sys
 import time
 import warnings
@@ -104,6 +105,13 @@ def run(args: argparse.Namespace) -> int:
     sites = load_sites(sites_path)
     if args.retry_failures:
         failure_text = fail_path.read_text(encoding="utf-8-sig") if fail_path.exists() else ""
+        recorded_periods = {
+            int(value) for value in re.findall(r"期数:\s*(\d+)", failure_text)
+        }
+        if recorded_periods and recorded_periods != {args.period}:
+            raise SystemExit(
+                f"失败TXT期数与目标期不一致: 记录={sorted(recorded_periods)} 目标={args.period}"
+            )
         failed_ids = set(FAILURE_SITE_ID_RE.findall(failure_text))
         if not failed_ids:
             print(f"[INFO] 未找到 {args.period}期失败站点，未执行抓取")
