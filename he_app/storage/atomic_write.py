@@ -3,7 +3,7 @@ import hashlib
 import os
 import tempfile
 import time
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from threading import Lock
 
@@ -72,9 +72,9 @@ def _portable_process_lock(path: Path, timeout: float | None):
             try:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
-            except BlockingIOError:
+            except BlockingIOError as exc:
                 if deadline is not None and time.monotonic() >= deadline:
-                    raise TimeoutError(f"等待文件锁超时: {path}")
+                    raise TimeoutError(f"等待文件锁超时: {path}") from exc
                 time.sleep(0.05)
         try:
             yield
@@ -171,3 +171,14 @@ def commit_text_transaction_unlocked(
         for temp_path in staged.values():
             if temp_path.exists():
                 temp_path.unlink()
+
+
+def commit_text_transaction(
+    changes: dict[Path, tuple[str, str] | None],
+    timeout: float | None = None,
+) -> None:
+    paths = sorted(changes, key=lambda path: str(path.resolve()).casefold())
+    with ExitStack() as locks:
+        for path in paths:
+            locks.enter_context(exclusive_path_lock(path, timeout=timeout))
+        commit_text_transaction_unlocked(changes)
