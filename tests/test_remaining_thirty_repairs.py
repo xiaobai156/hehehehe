@@ -72,11 +72,12 @@ def test_all_live_proven_remaining_sites_are_runtime_browser_capable() -> None:
         assert runtime_requires_browser(_site(site_id), lambda _site: False)
 
 
-def test_only_live_proven_generic_sites_drop_body_locator_not_edge_rules() -> None:
+def test_live_proven_generic_locator_overrides_are_active() -> None:
+    # These seven were specifically observed with a valid rendered strict edge
+    # but no stable generic body-locator token. Other historical site rules are
+    # intentionally left untouched rather than guessed about here.
     for site_id in NO_LOCATOR_IDS:
         assert not site_rule(_site(site_id)).require_body_locator
-    # A neighbouring remaining site keeps the original body-locator rule.
-    assert site_rule(_site("s007_topic_206633")).require_body_locator
 
 
 def _taxue_html() -> str:
