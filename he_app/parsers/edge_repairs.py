@@ -208,6 +208,16 @@ def _parse_tongtian(site: Site, period: int, documents: list[str]):
     return None, f"{site.name} 澳门综合杀表格里没找到{period}期杀合", [], "无当期"
 
 
+def _has_live_tongtian_shape(text: str) -> bool:
+    heading = text.find(_TONGTIAN_HEADING)
+    if heading < 0:
+        return False
+    return (
+        re.search(r"期数\s*杀肖\s*杀合\s*杀半头\s*开奖", text[heading:])
+        is not None
+    )
+
+
 def _tight_tongtian_bound(text: str, start: int, end: int) -> bool:
     """Bind evidence to the exact 澳门综合杀 section, not nearby tables."""
 
@@ -261,7 +271,7 @@ def apply_remaining_edge_parser_repairs() -> None:
         return
 
     def bounded(site_id: str, text: str, start: int, end: int) -> bool:
-        if site_id == _TONGTIAN_SITE_ID:
+        if site_id == _TONGTIAN_SITE_ID and _has_live_tongtian_shape(text):
             return _tight_tongtian_bound(text, start, end)
         return original(site_id, text, start, end)
 
