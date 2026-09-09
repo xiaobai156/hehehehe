@@ -36,7 +36,7 @@ if errorlevel 1 (
 choice /c NF /n /m "抓取模式：N=全站，F=仅重抓失败TXT站点："
 set "RUN_MODE="
 if errorlevel 2 set "RUN_MODE=--retry-failures"
-"%PY_EXE%" %PY_ARGS% he_crawler.py --period "%PERIOD%" %RUN_MODE%
+"%PY_EXE%" %PY_ARGS% he_crawler.py --period "%PERIOD%" --hard-timeout 90 --browser-hard-timeout 130 %RUN_MODE%
 set "EXIT_CODE=%ERRORLEVEL%"
 echo.
 echo Finished. Exit code: %EXIT_CODE%
