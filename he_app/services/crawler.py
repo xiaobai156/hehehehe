@@ -13,7 +13,7 @@ from he_app.services.adaptive_fetch import (
     try_http_current,
 )
 from he_app.services.browser_policy import runtime_click_first, runtime_requires_browser
-from he_app.services.document_sources import requires_browser
+from he_app.services.document_sources import find_dynamic_home_topic_url, requires_browser
 from he_app.services.single_period import evaluate_site_period
 
 
@@ -30,8 +30,8 @@ _RENDER_SPECIAL_DETAIL_SITE_IDS = frozenset(
 def matched_period_from_reason(requested_period: int, reason: str | None) -> int:
     """Return the strict period that produced a successful result.
 
-    Existing callers use the final tuple field as failure metadata.  Successful
-    exact-period results still keep it as ``None``.  A successful next-period
+    Existing callers use the final tuple field as failure metadata. Successful
+    exact-period results still keep it as ``None``. A successful next-period
     fallback records one private marker here so cache sync can write the value
     under its real issue number without changing the public success TXT format.
     """
@@ -91,6 +91,33 @@ def _render_discovered_special_detail(
     return browser.get_documents(target, period, False, timeout)
 
 
+def _render_dynamic_index_detail(
+    browser: BrowserClient,
+    site: Site,
+    period: int,
+    timeout: int,
+) -> list[str] | None:
+    """Browser-render the configured dynamic column and select one exact post.
+
+    This fallback is intentionally limited to the two live-proven dynamic
+    columns. It repeats the same strict selector used by the HTTP collector:
+    configured site name + exact issue + 绝杀一合 + one unique same-origin
+    link. It never searches an interior issue or a different domain.
+    """
+
+    if site.site_id not in _RENDER_SPECIAL_DETAIL_SITE_IDS:
+        return None
+    index_documents = browser.get_documents(site.url, period, False, timeout)
+    target = find_dynamic_home_topic_url(site, index_documents, period)
+    if target is None:
+        raise SiteScrapeFailure(
+            "主页找帖失败",
+            f"{site.name} 浏览器栏目页未找到{period}期唯一同源绝杀一合文章",
+        )
+    target = same_origin_url(site.url, target)
+    return browser.get_documents(target, period, False, timeout)
+
+
 def _scrape_exact_site(
     session: requests.Session,
     site: Site,
@@ -103,10 +130,30 @@ def _scrape_exact_site(
     special_failure: SiteScrapeFailure | None = None
     try:
         documents = collect_special_documents(session, site, timeout, period)
+    except (TimeoutError, requests.exceptions.Timeout):
+        # The two dynamic authors share one column URL. Under concurrent live
+        # runs the strict HTTP discovery can exhaust its request budget even
+        # though the rendered column is healthy. Render the same configured
+        # column and repeat the exact name+issue+keyword+same-origin selection.
+        if browser is not None and site.site_id in _RENDER_SPECIAL_DETAIL_SITE_IDS:
+            rendered = _render_dynamic_index_detail(browser, site, period, timeout)
+            if rendered is not None:
+                return evaluate_site_period(site, period, rendered)
+        raise
     except SiteScrapeFailure as exc:
-        # A few verified client-rendered pages expose only an HTTP shell.  When
-        # the scheduler supplied a browser for one of those exact site IDs,
-        # retain the HTTP failure only as fallback and render the same URL.
+        if browser is not None and site.site_id in _RENDER_SPECIAL_DETAIL_SITE_IDS:
+            # Never hide a real identity/candidate conflict. A plain "no post"
+            # result may be an HTTP shell, so only that category can be
+            # re-evaluated from the fully rendered same column.
+            if exc.category == "主页找帖失败":
+                rendered = _render_dynamic_index_detail(browser, site, period, timeout)
+                if rendered is not None:
+                    return evaluate_site_period(site, period, rendered)
+            if exc.category == "候选冲突":
+                return None, exc.reason, [], exc.category
+        # Other verified client-rendered pages may expose only an HTTP shell.
+        # When the scheduler supplied a browser for the exact site ID, retain
+        # the HTTP failure only as fallback and render the same configured URL.
         if browser is not None and _runtime_browser_required(site):
             special_failure = exc
             documents = None
@@ -169,10 +216,10 @@ def scrape_site(
 ) -> tuple[str | None, str, list[str], str | None]:
     """Accept the requested issue, or only its immediate next issue at the same edge.
 
-    The strict parser is executed independently for each issue.  Therefore a
+    The strict parser is executed independently for each issue. Therefore a
     ``top`` site can accept ``period + 1`` only when that issue is the physical
     top boundary; a ``bottom`` site can accept it only when it is the physical
-    bottom boundary.  Interior rows are never searched as a rescue path.
+    bottom boundary. Interior rows are never searched as a rescue path.
     """
 
     requested = _scrape_exact_site(session, site, period, timeout, browser)
