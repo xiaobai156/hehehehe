@@ -1,0 +1,78 @@
+name: Debug 252 final network subset
+
+on:
+  push:
+    branches:
+      - debug/252-network-retry-final-20260909
+    paths:
+      - .github/workflows/debug-252-network-retry-final.yml
+
+permissions:
+  contents: read
+
+jobs:
+  debug:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      PYTHONUTF8: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      HE_NETWORK_POLICY: "strict"
+      HE_MAX_RESPONSE_BYTES: "8388608"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: python -m pip install -e ".[browser,test]"
+      - name: Build subset
+        shell: pwsh
+        run: |
+          @'
+          import json
+          ids = {
+              "s034_topic_322671",
+              "s052_topic_206523",
+              "s116_topic_440127",
+              "s118_topic_1024655",
+              "s119_topic_1024654",
+              "s126_topic_930870",
+              "s115_topic_440075",
+              "s129_topic_732154",
+          }
+          sites = json.load(open("sites.json", encoding="utf-8-sig"))
+          subset = [item for item in sites if item["id"] in ids]
+          assert len(subset) == 8, [item["id"] for item in subset]
+          json.dump(subset, open("network-subset.json", "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+          '@ | Set-Content build_subset.py -Encoding UTF8
+          python build_subset.py
+      - name: Run production subset serially
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force network-result | Out-Null
+          python he_crawler.py `
+            --period 252 `
+            --sites network-subset.json `
+            --workers 1 `
+            --timeout 20 `
+            --hard-timeout 90 `
+            --browser-hard-timeout 130 `
+            --success network-result/success.txt `
+            --fail network-result/fail.txt `
+            --no-fingerprint-cache-sync
+      - name: Print files
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path network-result/success.txt) { Get-Content network-result/success.txt -Encoding UTF8 }
+          if (Test-Path network-result/fail.txt) { Get-Content network-result/fail.txt -Encoding UTF8 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: debug-252-final-network-subset
+          path: network-result
+          if-no-files-found: warn
+          retention-days: 3
