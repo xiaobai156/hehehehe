@@ -14,6 +14,7 @@ from he_app.fetch.discovery import collect_documents
 from he_app.fetch.http import fetch_text, fetch_text_with_curl
 from he_app.fetch.url_policy import StrictNetworkPolicy
 from he_app.parsers.common import has_kill_sum_keyword
+from he_app.parsers.dedicated.kaijiangfacai import KAIJIANGFACAI_SITE_ID
 from he_app.parsers.dedicated.tables import site_rule
 from he_app.parsers.policies import SITE_RULES
 from he_app.services.document_sources import (
@@ -44,6 +45,33 @@ for _site_id in _RUNTIME_NO_LOCATOR_SITE_IDS:
         require_body_locator=False,
         note=(f"{_rule.note}; " if _rule.note else "")
         + "252 live repair: strict row has no stable body locator",
+    )
+
+
+# The configured s131 IP endpoint was live-verified to redirect to this exact
+# canonical page. The canonical page itself passed the dedicated title/table,
+# target-period, direction and evidence checks. This is intentionally one
+# exact URL, not a domain suffix or global redirect exception.
+KAIJIANGFACAI_CONFIG_URL = "https://156.225.88.144:12098/#234432"
+KAIJIANGFACAI_CANONICAL_URL = "https://84477.kjfc88b.app:2443/welcome.html"
+
+
+def _verified_http_site(site: Site) -> Site:
+    if site.site_id != KAIJIANGFACAI_SITE_ID:
+        return site
+    if site.url != KAIJIANGFACAI_CONFIG_URL:
+        raise SiteScrapeFailure(
+            "站点身份错误",
+            f"{site.name} 配置入口已变化，拒绝沿用旧规范来源: {site.url}",
+        )
+    return Site(
+        name=site.name,
+        url=KAIJIANGFACAI_CANONICAL_URL,
+        pick=site.pick,
+        browser=False,
+        click_first=False,
+        site_id=site.site_id,
+        value_count=site.value_count,
     )
 
 
@@ -88,23 +116,24 @@ def collect_http_documents(
     site: Site,
     timeout: int,
 ) -> list[str]:
-    """Fetch the configured URL without enabling unapproved derived sources."""
+    """Fetch one verified HTTP source without enabling unapproved derivatives."""
 
+    request_site = _verified_http_site(site)
     rule = site_rule(site)
     try:
         return collect_documents(
             session,
-            site.url,
+            request_site.url,
             timeout,
             allow_inline_decode="http-decoded" in rule.allowed_fetch_kinds,
         )
     except requests.exceptions.SSLError:
         # Transport compatibility only: curl still verifies TLS and is pinned
-        # to the already-validated public address. No -k or cross-host rescue.
-        return _curl_tls_fallback(site, timeout)
+        # to the already-validated public address. No -k or unverified host.
+        return _curl_tls_fallback(request_site, timeout)
     except SiteScrapeFailure as exc:
         if _peer_socket_unobservable(exc):
-            return _curl_tls_fallback(site, timeout)
+            return _curl_tls_fallback(request_site, timeout)
         raise
 
 
@@ -214,7 +243,7 @@ def collect_special_documents(
         # dedicated collector and fail closed.
         if site.site_id == "s093_a_909922_article_aspx_id_3694545":
             raise
-        return _curl_tls_fallback(site, timeout)
+        return _curl_tls_fallback(_verified_http_site(site), timeout)
 
 
 def try_http_current(
@@ -233,6 +262,7 @@ def try_http_current(
 
 
 __all__ = [
+    "KAIJIANGFACAI_CANONICAL_URL",
     "collect_forum_documents_by_url_identity",
     "collect_http_documents",
     "collect_special_documents",
