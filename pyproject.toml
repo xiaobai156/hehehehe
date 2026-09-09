@@ -7,7 +7,11 @@ name = "he-crawler"
 version = "0.1.0"
 description = "Strict single-period kill-sum document collector"
 requires-python = ">=3.10"
-dependencies = ["requests>=2.32,<3", "beautifulsoup4>=4.12,<5"]
+dependencies = [
+  "requests>=2.32,<3",
+  "beautifulsoup4>=4.12,<5",
+  "tzdata>=2025.2; platform_system == 'Windows'",
+]
 
 [project.optional-dependencies]
 browser = ["selenium>=4.20,<5"]
