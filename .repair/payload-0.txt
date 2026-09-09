@@ -1,0 +1,479 @@
+@file .gitattributes
+@before -
+@after 5de7895ed4c516030162bc6a5109228bec3872dc490190099cee27b6dba7da4f
+@edit 0 0 5
+*.py text eol=lf
+*.md text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+*.bat text eol=crlf
+@end
+@file .gitignore
+@before -
+@after 58c7738153798284aa48dabc63f660cd3997939e5f338a6a5cb0b7ba18b03bf5
+@edit 0 0 20
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+*.egg-info/
+build/
+dist/
+*.tmp
+*.rollback.tmp
+test-results*.xml
+verification-*.txt
+source-snapshot.zip
+outputs/*.json
+!outputs/*.example.json
+audit/*_trace/
+.env
+.env.*
+@end
+@file REPAIR_NOTES.md
+@before -
+@after c8619b4a30f5dcf15b3ec64ae5d7c5eb34f23409517259bd2e7ed889d6b0bedc
+@edit 0 0 67
+# 2026-09-09 修复说明
+
+## 范围与基线
+
+基于 `a7bf9317712272aeab2f924103e5e1d74e6b22e0` 修复。保持三个兼容入口、正式输出目录、文件名称、站点 ID、站点 URL、top/bottom 一条有效数据边界不变。不是把原审查建议全部机械套用的重写。
+
+`sites.json` 与 `outputs/recent_10_cache.json` 不修改、不删除、不伪造更新时间。实际核对两份文件的 125 个站点身份一致，主要差异是排列顺序和旧数量字段。本次用兼容读取处理，不通过删除正式数据来消除错误。
+
+## 已落地
+
+- 删除缺失的浏览器专属函数和 `apply_cached_urls` 依赖；恢复真实四参数浏览器调用；保留 `he_app.api` 兼容导出。
+- 增加 `value_count`，旧配置自动识别女人味两个合数；其他站点保持一个，最终结果和缓存都验证数量、范围、唯一性。不支持无明确语义的 `top_period_exception`。
+- 空方向、错拼方向明确报错，中文方向别名保留。重复文字恢复真实物理出现位置，bottom 不再被文本去重挪到前面的行。
+- 失败记录共用一个序列化/解析模块；兼容无 ID 的旧文件并严格按站点身份映射。重抓保留已有成功、删除已修复失败、更新仍失败记录；空失败文件不再报错。
+- 判重期数改成必填；三个 BAT 优先使用项目 `.venv`，正确引用含空格的 Python 路径，输入先验证再交给命令行。判重不再默认 124 期。
+- 两条缓存写入链路共用身份和值校验，按站点 ID 而非数组位置匹配。失败删除旧当期指纹、保留历史、保留错误；局部更新保留未执行站点的空指纹身份，不可用局部结果初始化空缓存。
+- 比较缓存校验新鲜度和正式配置身份，拒绝无效、过期和明显未来的时间。新站 ID 不得覆盖旧站。历史不足单独报告，不把一个合法当期结果误当抓取失败删除。
+- 普通站默认不下载/采用脚本和解码结果；明确授权的来源才启用。Base64/正文严格解码，脚本去重并限制数量和大小。
+- HTTP 保存真实最终 URL，重定向先校验同源再跟随。TLS 默认验证；curl 仅一次兼容回退，不使用 `-k`、自动跳转、缺状态码成功等路径。异常证书站会明确失败，而不是偷偷接受不可信正文。
+- 页面编码优先 BOM、HTTP 和 HTML meta；不再为凑结果 `errors=ignore`。无声明且候选编码有歧义时明确失败。
+- 浏览器区分 Chrome/Edge，使用 Selenium Manager；只返回最终详情页，不合并列表页和点击前状态。候选文章链接要求唯一、同源、指定期和严格关键词。
+- 动态列表按指定期匹配和唯一性检查，保留 s108 当前/下一期标题优先规则，最终数据仍必须为指定期。
+- 论坛 API 生产采集验证记录 ID、期数、标题/所有者信息与正文，不随意取前若干帖子拼接。API 和列表 HTTP 路由不因为旧 browser 标记就启动浏览器。
+- 正文定位限定到同一 DOM/作者区块。相同快照的完整结构边界不能被截断文本救援；不把不相关旧文章当作当前文章的否决依据。
+- 证据使用真实出现位置，拒绝负偏移；manager 实际记录 ID 必须吻合，不再用期望 ID 代替观察到的 ID。
+- 历史指纹首先验证指定基准期的严格方向边界，然后在同一个已验证区块提取历史。补充通用、批量、锚点、表格、manager 等适配；不把单期方向规则放宽成扫描整页历史。不同快照不能拼接补满，历史冲突不静默选值。
+- 禁止自动把其他站点的域名拼成镜像；自定义站点配置不能误写正式缓存；所有输出互不覆盖输入/缓存。
+- 判重 TXT 共用文件事务，临时文件在写入/fsync 失败时清理，路径别名提前拒绝。修复 Linux 大小写不同路径共用线程锁的问题。
+- HTTP/浏览器分池且遵守总并发预算。判重进程超时从分配任务开始计时，覆盖浏览器启动前的等待。
+- 多期任务一期执行失败后继续其他期；失败进程不能借旧 TXT 冒充本次成功；多期始终禁用正式缓存更新。
+- 增加依赖描述、忽略规则和只读 CI；新增离线回归及真实浏览器本地 HTML 启动检查。
+
+## 保留和更正的规则
+
+1. 同一期出现在区块内部，不得与合法边界行制造冲突；不同合格来源的边界值不同仍判冲突。这是项目现有规则，不能改为“整页同一期必须全相同”。
+2. 保留“真实抓取 TXT 可用但缓存写失败”的已有行为：TXT 保留真实结果，缓存不变并明确非零退出。缓存损坏不能使真实结果退回旧 TXT。这与此前建议把 TXT 和缓存无条件绑成同一事务不同，是经过原测试和业务含义核对后的选择。
+3. 文件事务提供逐文件原子替换与可捕获异常回滚，不声称多个文件在停电/强杀时具备数据库级原子性。
+4. 稳定站点 ID 可能含历史编号；没有真实页面证据，不按 ID 文本强制改 URL 或批量重命名站点。
+5. 保留官方缓存旧文件以免拉取更新时删除用户数据。`.gitignore` 不会自动取消已跟踪文件，后续提交仍须检查正式缓存没有被测试修改。
+
+## 验证与限制
+
+本地 Python 3.13 离线单元/集成测试通过；GitHub CI 分别验证 Windows/Linux、Python 3.10/3.13，并单独启动实际浏览器读取本地 HTML。以该提交的 Actions 结果为准；没有把模拟页面或浏览器启动测试称为真实站点验收。
+
+尚未逐一访问 125 个网站完成指定期生产验收。尤其论坛 API 实际字段、动态标题、证书异常、特殊作者/表格格式需用真实页面复核；新的严格校验可能将过去的模糊“成功”变为有明确原因的失败。这些失败不允许通过重新开启全局 TLS 绕过或跨文章补数来消除。
+
+历史适配覆盖了多种已知解析器，但不是每一个特殊站都已证明有 6 至 10 条可用历史。没有可靠适配的站只能返回已验证边界行，并报告历史不足；不能据此保证“不重复”，不能伪造缺失期。
+
+现有缓存只有裸整数期号，没有周期标识。检测到高期号回到年初低期号时，本次实现是**拒绝混写并要求备份/初始化新周期**，不是完整的跨周期连续判重。没有擅自假定每周期必为 365 期。跨周期连续历史仍需要明确周期身份和真实期序资料。
+
+单期 HTTP 超时是协作预算，底层 socket/DNS/浏览器调用并非都能被线程强杀；不能声称 `--timeout 20` 保证每个单期站点严格 20 秒结束。判重进程另有硬任务超时。
+
+发现链接限制包括同源、协议和字面 IP/本地域名检查，不等同完整 DNS 重绑定隔离；需要更强隔离时应在运行机网络出口实施。
+
+## 安装与使用
+
+在项目目录执行（Python 3.10 或以上）：
+
+```powershell
+py -3 -m venv .venv
+.venv\Scripts\python.exe -m pip install -e ".[browser,test]"
+.venv\Scripts\python.exe -m pytest -q -m "not browser"
+```
+
+正式 BAT 文件名不变，双击后输入目标期。仓库缓存停留在旧期，首次运行应先备份正式目录。旧缓存成功率严格大于 85% 的完整单期真实结果会按正常规则更新；没有足够历史时判重必须报告不足，而不是把“无重复输出”当成完整通过。
+
+隔离测试采用单独的输出路径，并显式 `--no-fingerprint-cache-sync`。没有 live 验证的站点保留“待验证”状态。
+@end
+@file he_app/config/settings.py
+@before a6a9f24e39c308c1dcfd4aedf6f0ccf798372f929726ebb109a2846e3123bef7
+@after 9f31b37a4134c0b6bce40b92f02fbcfc2b3468b2599c5e215dad611f813c14af
+@edit 0 0 2
+import os
+
+@edit 3 5 2
+DEFAULT_OUTPUT_DIR = os.getenv("HE_OUTPUT_DIR", r"C:\Users\Administrator\Desktop\每天工具\爬虫合集\七类数据统一归纳")
+DEFAULT_FAILURE_OUTPUT_DIR = os.getenv("HE_FAILURE_OUTPUT_DIR", r"C:\Users\Administrator\Desktop\每天工具\爬虫合集\七类数据统一归纳失败")
+@end
+@file he_app/config/sites.py
+@before fe8e19953f77070198ab3f16bd4445bcf51018417c7e31446b795249b46560f1
+@after 0d63f580477a90d8ee3bff9918cf40dd807de9fbbca9f4734a2207926be77839
+@edit 40 41 4
+        try:
+            pick = normalize_pick(raw_pick)
+        except ValueError as exc:
+            raise SiteConfigError(f"站点配置第{index}条 pick 非法: {raw_pick}") from exc
+@edit 54 55 9
+        expected_count = 2 if site_id == "s085_kcvpleh" else 1
+        value_count = item.get("value_count", expected_count)
+        if type(value_count) is not int or value_count != expected_count:
+            raise SiteConfigError(f"站点配置第{index}条 value_count 必须为{expected_count}")
+        if item.get("top_period_exception") is not None:
+            raise SiteConfigError("不支持期数方向例外 top_period_exception")
+        sites.append(Site(name=name, url=url, pick=pick, browser=item["browser"],
+                          click_first=item["click_first"], site_id=site_id,
+                          value_count=value_count))
+@edit 68 68 1
+            "value_count": site.value_count,
+@end
+@file he_app/domain/models.py
+@before fe587a84585e0559ee34289d6c23f221595958e54f434312a8e0fd63ba387c0e
+@after 46420de41ae00202d0d0119c9e84fbc93030c1a4b80971fff9346f3ff60c8c7e
+@edit 35 35 6
+    value_count: int = 1
+
+    def __post_init__(self) -> None:
+        # Preserve six-argument callers of the sole registered two-value site.
+        if self.site_id == "s085_kcvpleh" and self.value_count == 1:
+            object.__setattr__(self, "value_count", 2)
+@end
+@file he_app/domain/policies.py
+@before 6dc7c09d360345b6280a68558c49c1537f1b42c855235097733a5f101966bcf1
+@after b04b8f4d0f15975cd62a594c227c2ac47553e3c4c830a69013454b05bf4cf67f
+@edit 42 43 1
+    raise ValueError(f"非法方向: {pick!r}")
+@end
+@file he_app/fetch/browser.py
+@before f8e3dd5b09c0d461a571e06255d1e189964343a31e1907a125aebe6892aae184
+@after 1160d5f869f853c003d06731aa00241b2a79497c5efa5fd9fa32fb9eb3a6e8df
+@edit 2 3 1
+from queue import Empty, Full, Queue
+@edit 6 6 2
+from he_app.domain.errors import SiteScrapeFailure
+from he_app.fetch.url_policy import same_origin_url, url_origin
+@edit 33 35 2
+        from selenium.webdriver.chrome.options import Options as ChromeOptions
+        from selenium.webdriver.edge.options import Options as EdgeOptions
+@edit 36 37 3
+        binary = self.find_browser_binary()
+        is_edge = bool(binary and Path(binary).name.lower().startswith("msedge"))
+        options = EdgeOptions() if is_edge else ChromeOptions()
+@edit 40 41 0
+@edit 42 43 0
+@edit 44 53 4
+        if binary:
+            options.binary_location = binary
+        factory = webdriver.Edge if is_edge else webdriver.Chrome
+        self.driver = factory(options=options)
+@edit 91 92 1
+        deadline = time.monotonic() + max(0.0, max_wait)
+@edit 97 98 1
+            if ready or time.monotonic() >= deadline:
+@edit 105 105 1
+        url_origin(url)
+@edit 106 111 2
+        self.driver.get(url)
+        same_origin_url(url, self.driver.current_url)
+@edit 113 113 12
+        if click_first:
+            previous = self.get_document_state()
+            if self.try_click_labels():
+                same_origin_url(url, self.driver.current_url)
+                self.wait_for_document(min(float(timeout), 2.0), previous)
+            previous = self.get_document_state()
+            if not self.try_click_best_post(period):
+                raise SiteScrapeFailure("主页找帖失败", "没有唯一的同源指定期严格文章链接")
+            same_origin_url(url, self.driver.current_url)
+            self.wait_for_document(min(float(timeout), 3.0), previous)
+        # Navigation snapshots and list summaries are diagnostics, not alternate
+        # authorities that may rescue a failed final detail page.
+@edit 114 125 1
+        return [documents[-1]] if documents else []
+@edit 133 133 4
+        original_url = url
+        url = self.driver.current_url
+        if original_url:
+            same_origin_url(original_url, url)
+@edit 141 143 2
+                parent_url=original_url,
+                authority_id=state_id,
+@edit 150 152 2
+                parent_url=original_url,
+                authority_id=state_id,
+@edit 180 180 1
+        # Only actual navigable links; never score/click arbitrary parent DIVs.
+@edit 181 187 5
+        const periodRe = new RegExp("(?:^|[^0-9])" + String(arguments[0]) + "\\s*期");
+        const keywordRe = /绝\s*杀\s*一\s*合|公式\s*杀\s*合|绝\s*杀\s*合/;
+        const links = new Map();
+        for (const el of document.querySelectorAll("a[href]")) {
+            const text = (el.innerText || "").trim();
+@edit 188 197 4
+            if (!periodRe.test(text) || !keywordRe.test(text) || rect.width < 1 || rect.height < 1) continue;
+            const href = new URL(el.getAttribute("href"), location.href);
+            if (!/^https?:$/.test(href.protocol) || href.origin !== location.origin || href.href === location.href) continue;
+            links.set(href.href, el);
+@edit 198 201 4
+        if (links.size > 1) return "conflict";
+        if (links.size !== 1) return "missing";
+        links.values().next().value.click();
+        return "clicked";
+@edit 202 206 4
+        status = self.driver.execute_script(script, period)
+        if status == "conflict":
+            raise SiteScrapeFailure("候选冲突", "浏览器命中多个不同目标文章链接")
+        return status == "clicked"
+@edit 253 254 3
+            except Exception as exc:
+                self.failure = exc
+                self.started = True
+@edit 290 291 4
+        try:
+            client = self.available.get(timeout=60.0)
+        except Empty as exc:
+            raise TimeoutError("浏览器池等待超过60秒") from exc
+@edit 337 338 2
+    from he_app.services.document_sources import requires_browser
+    browser_site_count = sum(1 for site in sites if requires_browser(site))
+@end
+@file he_app/fetch/discovery.py
+@before d59a78582c1d142e06d516a7b056405c85de8ac15a4d7d147aeb05bdb7902851
+@after 63283141abbd9cd46cde8a0a81a55b4f5445bd10c311826a1dfb06eeef766a70
+@edit 10 10 1
+from .url_policy import same_origin_url
+@edit 22 24 2
+            raw = base64.b64decode(padded, validate=True)
+            decoded.append(raw.decode("utf-8", errors="strict"))
+@edit 29 30 1
+def collect_page_documents(session: requests.Session, url: str, timeout: int, *, allow_inline_decode: bool = False) -> tuple[list[str], str]:
+@edit 31 31 1
+    url = str(getattr(page_html, "final_url", url))
+@edit 43 44 1
+    page_decoded = decode_strdecode_blocks(page_html) if allow_inline_decode else []
+@edit 52 53 1
+                authority_id=page_authority,
+@edit 66 66 1
+    *, allow_scripts: bool = False,
+@edit 67 67 3
+    if not allow_scripts:
+        return documents
+    url = str(getattr(page_html, "final_url", url))
+@edit 68 69 1
+        same_origin_url(url, script_url)
+@edit 73 73 2
+    if len(unique_urls) > 8:
+        raise ValueError("授权脚本数量超过8个上限")
+@edit 105 106 1
+                    authority_id=raw_authority,
+@edit 121 122 1
+    for script_url in unique_urls:
+@edit 126 129 7
+def collect_documents(session: requests.Session, url: str, timeout: int,
+                      *, allow_inline_decode: bool = False,
+                      allow_scripts: bool = False) -> list[str]:
+    documents, page_html = collect_page_documents(session, url, timeout,
+                                                allow_inline_decode=allow_inline_decode)
+    return collect_documents_from_page(session, url, timeout, documents, page_html,
+                                       allow_scripts=allow_scripts)
+@end
+@file he_app/fetch/http.py
+@before 8ca6f9b09ab8588c7fdf347deb074669727e2fd3b689df43466859808e99d179
+@after f21c3c7c8f6a62cb3f801999a5e6f386827817b69e18d182180d55765e12ba55
+@edit 0 0 6
+"""HTTP-first fetch with verified redirects, bounded bodies and one curl fallback.
+
+Requests' socket timeouts are NOT hard wall-clock task deadlines. The deadline
+here is cooperative; isolated worker deadlines bound complete duplicate jobs.
+"""
+import codecs
+@edit 1 1 1
+import shutil
+@edit 2 2 1
+import time
+@edit 9 10 1
+from he_app.fetch.url_policy import same_origin_url, url_origin
+@edit 16 16 1
+MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+@edit 18 18 10
+
+
+class FetchedText(str):
+    def __new__(cls, text: str, *, final_url: str, status_code: int,
+                content_type: str = ""):
+        value = super().__new__(cls, text)
+        value.final_url = final_url
+        value.status_code = status_code
+        value.content_type = content_type
+        return value
+@edit 25 28 1
+def build_host_locks(sites: list[Site], mirror_url_map: dict[int, list[str]] | None = None) -> dict[str, Lock]:
+@edit 42 44 6
+    url_origin(url)
+    if timeout <= 0:
+        raise ValueError("timeout 必须为正数")
+    lock = getattr(session, "_he_host_locks", {}).get(host_key(url))
+    with lock if lock is not None else nullcontext():
+        deadline = time.monotonic() + timeout
+@edit 46 50 8
+        except (requests.exceptions.SSLError, requests.exceptions.Timeout):
+            raise
+        except requests.exceptions.ConnectionError:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("HTTP请求预算已耗尽")
+            # Curl is a transport compatibility fallback, never a TLS bypass.
+            return fetch_text_with_curl(url, remaining)
+@edit 54 58 2
+    return bool(match and 400 <= int(match.group(1)) < 500
+                and int(match.group(1)) not in {408, 409, 425, 429})
+@edit 60 65 29
+def fetch_text_fast(session: requests.Session, url: str, timeout: float) -> str:
+    deadline = time.monotonic() + timeout
+    current = url
+    for _ in range(6):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("HTTP请求预算已耗尽")
+        with session.get(current, timeout=remaining, allow_redirects=False, stream=True) as response:
+            final_url = same_origin_url(url, response.url)
+            if response.status_code in {301, 302, 303, 307, 308}:
+                location = response.headers.get("Location")
+                if not location:
+                    raise RuntimeError("HTTP重定向缺少Location")
+                current = same_origin_url(url, same_origin_url(final_url, location))
+                continue
+            if not 200 <= response.status_code < 300:
+                raise RuntimeError(f"HTTP Error {response.status_code}: {http_status_label(response.status_code)}")
+            content_type = response.headers.get("Content-Type", "")
+            body = bytearray()
+            for chunk in response.iter_content(chunk_size=16384):
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("HTTP响应读取预算已耗尽")
+                body.extend(chunk)
+                if len(body) > MAX_RESPONSE_BYTES:
+                    raise RuntimeError("HTTP响应超过8MiB上限")
+            return FetchedText(decode_response_bytes(bytes(body), content_type),
+                               final_url=final_url, status_code=response.status_code,
+                               content_type=content_type)
+    raise RuntimeError("HTTP重定向次数超过限制")
+@edit 67 93 9
+def curl_base_command(url: str, timeout: float) -> list[str]:
+    executable = shutil.which("curl.exe") or shutil.which("curl")
+    if executable is None:
+        raise RuntimeError("未安装curl，无法使用兼容传输")
+    # No -k, -L, protocol downgrade, or automatic retry. A curl-only redirect
+    # is rejected rather than followed before its destination can be checked.
+    return [executable, "--proto", "=http,https", "--http1.1", "--max-redirs", "0",
+            "--connect-timeout", str(min(timeout, 10.0)), "--max-time", str(timeout),
+            "--max-filesize", str(MAX_RESPONSE_BYTES), "-sS", "-A", DEFAULT_HEADERS["User-Agent"]]
+@edit 95 103 2
+def curl_command_variants(url: str, timeout: float) -> list[list[str]]:
+    return [curl_base_command(url, timeout) + ["--compressed", url]]
+@edit 109 114 2
+    body, status = raw.rsplit(marker, 1)
+    return (body, int(status.strip())) if re.fullmatch(rb"\d{3}", status.strip()) else (body, None)
+@edit 117 133 1
+    return False
+@edit 140 175 15
+def fetch_text_with_curl(url: str, timeout: float) -> str:
+    url_origin(url)
+    command = curl_command_variants(url, timeout)[0]
+    command = command[:-1] + ["-w", "\n__HTTP_STATUS__:%{http_code}", command[-1]]
+    result = subprocess.run(command, capture_output=True, check=False, timeout=timeout)
+    body, status = split_curl_http_status(result.stdout)
+    if result.returncode:
+        # Lossy decoding is only for diagnostics, never for candidate content.
+        message = result.stderr.decode("utf-8", errors="replace")[:300]
+        raise RuntimeError(f"curl exit {result.returncode}: {message}")
+    if status is None or not 200 <= status < 300:
+        raise RuntimeError(f"HTTP Error {status}: curl未取得有效2xx响应")
+    if len(body) > MAX_RESPONSE_BYTES:
+        raise RuntimeError("curl响应超过8MiB上限")
+    return FetchedText(decode_response_bytes(body), final_url=url, status_code=status)
+@edit 178 188 8
+    return {502: "Bad Gateway", 503: "Service Unavailable", 520: "Unknown Error",
+            521: "Web Server Is Down", 522: "Connection Timed Out",
+            523: "Origin Is Unreachable", 524: "A Timeout Occurred"}.get(status, "HTTP request failed")
+
+
+def parse_charset_candidates(content_type: str) -> list[str]:
+    match = re.search(r"charset\s*=\s*[\"']?([A-Za-z0-9_.-]+)", content_type or "", re.I)
+    return [match.group(1)] if match else []
+@edit 191 210 27
+    if data.startswith(codecs.BOM_UTF8):
+        return data.decode("utf-8-sig")
+    if data.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        return data.decode("utf-16")
+    candidates = parse_charset_candidates(content_type)
+    head = data[:4096].decode("ascii", errors="ignore")
+    for meta in re.findall(r"<meta\b[^>]*>", head, re.I):
+        candidates.extend(parse_charset_candidates(meta))
+    if candidates:
+        for encoding in dict.fromkeys(candidates):
+            try:
+                return data.decode(encoding, errors="strict")
+            except (LookupError, UnicodeDecodeError):
+                continue
+        raise ValueError(f"响应声明的字符编码无法无损解码: {candidates}")
+    try:
+        return data.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        alternatives = set()
+        for encoding in ("gb18030", "big5"):
+            try:
+                alternatives.add(data.decode(encoding, errors="strict"))
+            except UnicodeDecodeError:
+                pass
+        if len(alternatives) == 1:
+            return alternatives.pop()
+        raise ValueError("响应编码不明确，拒绝有损或歧义解码") from None
+@end
+@file he_app/fetch/url_policy.py
+@before -
+@after cee7657713e4fc17946f185dc06540945aa5552f63fb20764ad238644247a288
+@edit 0 0 34
+"""Validate discovered links before requesting them; never infer mirror relationships."""
+import ipaddress
+from urllib.parse import urljoin, urlsplit
+
+from he_app.domain.errors import SiteScrapeFailure
+
+
+def url_origin(url: str) -> tuple[str, str, int]:
+    try:
+        parsed = urlsplit(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("only absolute HTTP(S) URLs are allowed")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("URL credentials are not allowed")
+        host = parsed.hostname.rstrip(".").lower()
+        if host == "localhost" or host.endswith((".localhost", ".local", ".internal")):
+            raise ValueError("local host is not allowed")
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            pass
+        else:
+            if not address.is_global:
+                raise ValueError("non-public IP address is not allowed")
+        return parsed.scheme, host, parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError as exc:
+        raise SiteScrapeFailure("站点身份错误", f"非法来源URL: {url}: {exc}") from exc
+
+
+def same_origin_url(base: str, href: str) -> str:
+    target = urljoin(base, href.strip())
+    if url_origin(base) != url_origin(target):
+        raise SiteScrapeFailure("站点身份错误", f"拒绝未授权跨源地址: {target}")
+    return target
+@end
