@@ -1,0 +1,73 @@
+name: Debug final five after fix
+
+on:
+  push:
+    branches:
+      - fix/final-five-252-20260909
+    paths:
+      - .github/workflows/debug-final-five-after-fix.yml
+
+permissions:
+  contents: read
+
+jobs:
+  site:
+    strategy:
+      fail-fast: false
+      matrix:
+        site_id:
+          - s051_topic_702074
+          - s065_topic_437721
+          - s108_topic_1024380
+          - s124_22_868393c_art_zhuanqu_8129
+          - s129_topic_732154
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      PYTHONUTF8: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      HE_NETWORK_POLICY: strict
+      HE_MAX_RESPONSE_BYTES: "8388608"
+      TARGET_SITE_ID: ${{ matrix.site_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e ".[browser,test]"
+      - name: Build one-site config
+        shell: pwsh
+        run: |
+          @'
+          import json, os
+          target = os.environ["TARGET_SITE_ID"]
+          sites = json.load(open("sites.json", encoding="utf-8-sig"))
+          subset = [item for item in sites if item["id"] == target]
+          assert len(subset) == 1, target
+          json.dump(subset, open("one-site.json", "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+          '@ | Set-Content one_site.py -Encoding UTF8
+          python one_site.py
+      - name: Run strict production path
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force result | Out-Null
+          python he_crawler.py `
+            --period 252 `
+            --sites one-site.json `
+            --workers 1 `
+            --timeout 20 `
+            --hard-timeout 90 `
+            --browser-hard-timeout 150 `
+            --success result/success.txt `
+            --fail result/fail.txt `
+            --no-fingerprint-cache-sync
+          if (Test-Path result/success.txt) {
+            Get-Content result/success.txt -Encoding UTF8
+            $success = Get-Content result/success.txt -Encoding UTF8 | Where-Object { $_ -match '^(?:0[1-9]|1[0-3])合(?:,(?:0[1-9]|1[0-3])合)*\s+\S' }
+            if ($success.Count -lt 1) { throw "strict production result missing" }
+          } else {
+            if (Test-Path result/fail.txt) { Get-Content result/fail.txt -Encoding UTF8 }
+            throw "strict production site failed"
+          }
