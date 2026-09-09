@@ -18,7 +18,7 @@ from he_app.domain.models import Site, SourceDocument
 from he_app.domain.policies import normalize_pick
 from he_app.fetch import discovery, http
 from he_app.fetch.browser import BrowserClient
-from he_app.fetch.url_policy import same_origin_url
+from he_app.fetch.url_policy import ResolvedOrigin, StrictNetworkPolicy, same_origin_url, resolve_public_origin, verify_public_peer
 from he_app.services import crawler, duplicate_check, multi_period, runner
 from he_app.services.single_period import parse_site_period
 from he_app.storage.atomic_write import commit_text_transaction
@@ -133,7 +133,8 @@ def test_retry_old_report_end_to_end(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "scrape_parallel_site", scrape)
     args = runner.build_arg_parser().parse_args([
         "--period", "211", "--sites", str(config), "--success", str(success),
-        "--fail", str(failure), "--retry-failures", "--no-fingerprint-cache-sync"])
+        "--fail", str(failure), "--retry-failures", "--no-fingerprint-cache-sync",
+        "--no-isolation", "--cycle-year", "2026"])
     assert runner.run(args) == 0
     assert called == ["b"]
     text = success.read_text(encoding="utf-8-sig")
@@ -252,7 +253,7 @@ def test_curl_status_is_required(monkeypatch):
     monkeypatch.setattr(http, "curl_command_variants", lambda *args: [["curl", "https://example.test/"]])
     monkeypatch.setattr(http.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=b"looks valid", stderr=b""))
     with pytest.raises(RuntimeError):
-        http.fetch_text_with_curl("https://example.test/", 5)
+        http.fetch_text_with_curl("https://example.test/", 5, ResolvedOrigin("https", "example.test", 443, ("93.184.216.34",)))
 
 
 def test_bom_and_meta_encoding_are_respected():
@@ -300,13 +301,18 @@ def test_same_snapshot_complete_boundary_cannot_be_rescued():
 
 
 def test_browser_returns_final_source_not_navigation_snapshots(monkeypatch):
-    client = BrowserClient()
+    class NoopBrowserNetworkPolicy:
+        def resolve(self, url): return ResolvedOrigin("https", "example.test", 443, ("93.184.216.34",))
+        def verify_address(self, value, **kwargs): return value
+    client = BrowserClient(network_policy=NoopBrowserNetworkPolicy())
     class Driver:
         current_url = "https://example.test/list"
         page_source = "211期绝杀一合[03合]开"
         def set_page_load_timeout(self, value): pass
         def get(self, url): self.current_url = url
         def find_element(self, *args): return SimpleNamespace(text=self.page_source)
+        def get_log(self, kind):
+            return [{"message": json.dumps({"message": {"method": "Network.responseReceived", "params": {"type": "Document", "response": {"url": self.current_url, "remoteIPAddress": "93.184.216.34"}}}})}]
     client.driver = Driver()
     monkeypatch.setattr(client, "wait_for_document", lambda *args: None)
     monkeypatch.setattr(client, "try_click_labels", lambda: False)
@@ -453,7 +459,7 @@ def test_insufficient_history_report_preserves_valid_current_cache(tmp_path, mon
     monkeypatch.setattr(duplicate_check, "run_fingerprint_jobs",
                         lambda *a, **k: ({0: {211: "03合"}}, {}))
     captured = {}
-    def write(path, sites, fingerprints, errors, *args):
+    def write(path, sites, fingerprints, errors, *args, **kwargs):
         captured["fingerprints"] = fingerprints
         captured["errors"] = errors
     monkeypatch.setattr(duplicate_check, "write_fingerprint_cache", write)
@@ -478,3 +484,38 @@ def test_spawn_workers_complete_and_close_without_network():
         hard_timeout=15, poll_interval=0.01, worker_callable=_isolated_test_worker)
     assert results == {0: {211: "03合"}, 1: {211: "03合"}}
     assert errors == {}
+
+
+def test_session_ignores_environment_proxies():
+    session = http.create_session()
+    try:
+        assert session.trust_env is False
+        assert session.proxies == {}
+        assert isinstance(session._he_network_policy, StrictNetworkPolicy)
+    finally:
+        session.close()
+
+
+def test_dns_policy_rejects_private_or_mixed_answers(monkeypatch):
+    import socket
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: [
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443)),
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443)),
+    ])
+    with pytest.raises(SiteScrapeFailure, match="非公网"):
+        resolve_public_origin("https://example.test/")
+
+
+def test_peer_policy_rejects_dns_rebinding_to_private_address():
+    class Sock:
+        def getpeername(self): return ("10.0.0.5", 443)
+    response = SimpleNamespace(raw=SimpleNamespace(_connection=SimpleNamespace(sock=Sock())))
+    with pytest.raises(SiteScrapeFailure, match="非公网"):
+        verify_public_peer(response, ResolvedOrigin("https", "example.test", 443, ("93.184.216.34",)))
+
+
+def test_peer_policy_accepts_public_connected_address():
+    class Sock:
+        def getpeername(self): return ("93.184.216.34", 443)
+    response = SimpleNamespace(raw=SimpleNamespace(_connection=SimpleNamespace(sock=Sock())))
+    assert verify_public_peer(response, ResolvedOrigin("https", "example.test", 443, ("93.184.216.34",))) == "93.184.216.34"

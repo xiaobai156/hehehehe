@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 import requests
 
 from he_app.domain.models import Site
-from he_app.fetch.url_policy import same_origin_url, url_origin
+from he_app.fetch.url_policy import StrictNetworkPolicy, same_origin_url, url_origin
 
 DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
@@ -52,7 +52,10 @@ def build_host_locks(sites: list[Site], mirror_url_map: dict[int, list[str]] | N
 def create_session(host_locks: dict[str, Lock] | None = None) -> requests.Session:
     session = requests.Session()
     session.headers.update(DEFAULT_HEADERS)
+    session.trust_env = False
+    session.proxies = {}
     session._he_host_locks = host_locks or {}
+    session._he_network_policy = StrictNetworkPolicy(require_peer=True)
     return session
 
 
@@ -72,7 +75,8 @@ def fetch_text(session: requests.Session, url: str, timeout: int) -> str:
             if remaining <= 0:
                 raise TimeoutError("HTTP请求预算已耗尽")
             # Curl is a transport compatibility fallback, never a TLS bypass.
-            return fetch_text_with_curl(url, remaining)
+            policy = getattr(session, "_he_network_policy", StrictNetworkPolicy(require_peer=False))
+            return fetch_text_with_curl(url, remaining, policy.resolve(url))
 
 
 def is_deterministic_http_error(exc: Exception) -> bool:
@@ -84,11 +88,14 @@ def is_deterministic_http_error(exc: Exception) -> bool:
 def fetch_text_fast(session: requests.Session, url: str, timeout: float) -> str:
     deadline = time.monotonic() + timeout
     current = url
+    policy = getattr(session, "_he_network_policy", None)
     for _ in range(6):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError("HTTP请求预算已耗尽")
+        resolved = policy.resolve(current) if policy is not None else None
         with session.get(current, timeout=remaining, allow_redirects=False, stream=True) as response:
+            peer_ip = policy.verify_response(response, resolved) if policy is not None else None
             final_url = same_origin_url(url, response.url)
             if response.status_code in {301, 302, 303, 307, 308}:
                 location = response.headers.get("Location")
@@ -106,25 +113,31 @@ def fetch_text_fast(session: requests.Session, url: str, timeout: float) -> str:
                 body.extend(chunk)
                 if len(body) > MAX_RESPONSE_BYTES:
                     raise RuntimeError("HTTP响应超过8MiB上限")
-            return FetchedText(decode_response_bytes(bytes(body), content_type),
-                               final_url=final_url, status_code=response.status_code,
-                               content_type=content_type)
+            fetched = FetchedText(decode_response_bytes(bytes(body), content_type),
+                                  final_url=final_url, status_code=response.status_code,
+                                  content_type=content_type)
+            fetched.peer_ip = peer_ip
+            return fetched
     raise RuntimeError("HTTP重定向次数超过限制")
 
 
-def curl_base_command(url: str, timeout: float) -> list[str]:
+def curl_base_command(url: str, timeout: float, resolved=None) -> list[str]:
     executable = shutil.which("curl.exe") or shutil.which("curl")
     if executable is None:
         raise RuntimeError("未安装curl，无法使用兼容传输")
     # No -k, -L, protocol downgrade, or automatic retry. A curl-only redirect
     # is rejected rather than followed before its destination can be checked.
-    return [executable, "--proto", "=http,https", "--http1.1", "--max-redirs", "0",
-            "--connect-timeout", str(min(timeout, 10.0)), "--max-time", str(timeout),
-            "--max-filesize", str(MAX_RESPONSE_BYTES), "-sS", "-A", DEFAULT_HEADERS["User-Agent"]]
+    command = [executable, "--proto", "=http,https", "--http1.1", "--max-redirs", "0",
+               "--noproxy", "*", "--connect-timeout", str(min(timeout, 10.0)),
+               "--max-time", str(timeout), "--max-filesize", str(MAX_RESPONSE_BYTES),
+               "-sS", "-A", DEFAULT_HEADERS["User-Agent"]]
+    if resolved is not None:
+        command.extend(["--resolve", f"{resolved.host}:{resolved.port}:{resolved.addresses[0]}"])
+    return command
 
 
-def curl_command_variants(url: str, timeout: float) -> list[list[str]]:
-    return [curl_base_command(url, timeout) + ["--compressed", url]]
+def curl_command_variants(url: str, timeout: float, resolved=None) -> list[list[str]]:
+    return [curl_base_command(url, timeout, resolved) + ["--compressed", url]]
 
 
 def split_curl_http_status(raw: bytes) -> tuple[bytes, int | None]:
@@ -144,9 +157,10 @@ def reset_curl_variant_memory() -> None:
         CURL_VARIANT_BY_HOST.clear()
 
 
-def fetch_text_with_curl(url: str, timeout: float) -> str:
+def fetch_text_with_curl(url: str, timeout: float, resolved=None) -> str:
     url_origin(url)
-    command = curl_command_variants(url, timeout)[0]
+    resolved = resolved or StrictNetworkPolicy(require_peer=False).resolve(url)
+    command = curl_command_variants(url, timeout, resolved)[0]
     command = command[:-1] + ["-w", "\n__HTTP_STATUS__:%{http_code}", command[-1]]
     result = subprocess.run(command, capture_output=True, check=False, timeout=timeout)
     body, status = split_curl_http_status(result.stdout)
