@@ -1,5 +1,6 @@
 name: Run 252 live validation
 
+# rerun after cycle/fingerprint compatibility repair
 on:
   push:
     branches:
