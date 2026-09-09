@@ -1,5 +1,6 @@
 name: Validate 252 repair branch
 
+# rerun after browser-pool and peer-verification repairs
 on:
   push:
     branches:
@@ -36,6 +37,7 @@ jobs:
             --period 252 `
             --periods 10 `
             --workers 8 `
+            --browser-workers 3 `
             --timeout 20 `
             --hard-timeout 90 `
             --output-dir live-validation
@@ -45,6 +47,7 @@ jobs:
           $report = Get-Content live-validation/live-validation.json -Raw -Encoding UTF8 | ConvertFrom-Json
           $failed = $report.site_count - $report.current_success_count
           Write-Host "baseline_success=17 baseline_failed=108"
+          Write-Host "first_repair_success=23 first_repair_failed=102"
           Write-Host "repaired_success=$($report.current_success_count) repaired_failed=$failed"
           Write-Host "history_complete=$($report.history_complete_count) hard_timeouts=$($report.hard_timeout_count)"
       - name: Upload report
