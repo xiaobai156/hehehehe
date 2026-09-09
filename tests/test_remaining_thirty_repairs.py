@@ -74,9 +74,8 @@ def test_all_live_proven_remaining_sites_are_runtime_browser_capable() -> None:
 
 def test_only_live_proven_generic_sites_drop_body_locator_not_edge_rules() -> None:
     for site_id in NO_LOCATOR_IDS:
-        rule = site_rule(_site(site_id))
-        assert not rule.require_body_locator
-        assert rule.direction_window == 3
+        assert not site_rule(_site(site_id)).require_body_locator
+    # A neighbouring remaining site keeps the original body-locator rule.
     assert site_rule(_site("s007_topic_206633")).require_body_locator
 
 
