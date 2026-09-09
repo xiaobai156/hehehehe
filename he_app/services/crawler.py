@@ -6,6 +6,7 @@ from he_app.domain.errors import SiteScrapeFailure
 from he_app.domain.models import Site
 from he_app.fetch.browser import BrowserClient, BrowserPool, close_browser_safely
 from he_app.fetch.http import create_session
+from he_app.fetch.url_policy import same_origin_url
 from he_app.services.adaptive_fetch import (
     collect_http_documents,
     collect_special_documents,
@@ -18,6 +19,12 @@ from he_app.services.single_period import evaluate_site_period
 
 Outcome = tuple[int, Site, str | None, str, str | None, list[str], str | None]
 MATCHED_PERIOD_PREFIX = "__matched_period__:"
+_RENDER_SPECIAL_DETAIL_SITE_IDS = frozenset(
+    {
+        "s118_topic_1024655",  # 和风细雨
+        "s119_topic_1024654",  # 新人旧梦
+    }
+)
 
 
 def matched_period_from_reason(requested_period: int, reason: str | None) -> int:
@@ -52,6 +59,38 @@ def _runtime_browser_required(site: Site) -> bool:
     return runtime_requires_browser(site, requires_browser)
 
 
+def _render_discovered_special_detail(
+    browser: BrowserClient,
+    site: Site,
+    period: int,
+    timeout: int,
+    documents: list[str],
+) -> list[str] | None:
+    """Render one exact same-origin detail discovered by a strict collector.
+
+    和风细雨/新人旧梦 have a dynamic column page. The HTTP collector already
+    proves the unique current article URL, but that detail can itself be a
+    client-rendered shell. In that case render that *same discovered URL*;
+    never fall back to a different article, domain, or an interior period.
+    """
+
+    if site.site_id not in _RENDER_SPECIAL_DETAIL_SITE_IDS:
+        return None
+    targets: set[str] = set()
+    for document in documents:
+        raw = str(getattr(document, "source_url", "") or "").strip()
+        if not raw:
+            continue
+        targets.add(same_origin_url(site.url, raw))
+    if len(targets) != 1:
+        raise SiteScrapeFailure(
+            "候选冲突",
+            f"{site.name} 动态详情来源数量={len(targets)}，必须唯一",
+        )
+    target = next(iter(targets))
+    return browser.get_documents(target, period, False, timeout)
+
+
 def _scrape_exact_site(
     session: requests.Session,
     site: Site,
@@ -73,10 +112,23 @@ def _scrape_exact_site(
             documents = None
         else:
             return None, exc.reason, [], exc.category
-    if documents is not None:
-        return evaluate_site_period(site, period, documents)
 
     browser_required = _runtime_browser_required(site)
+    if documents is not None:
+        evaluation = evaluate_site_period(site, period, documents)
+        if evaluation[0] is not None:
+            return evaluation
+        # The dynamic collector may successfully identify the exact same-origin
+        # article while its HTTP body is only a stale shell. Render only that
+        # verified detail; do not rediscover or loosen the article identity.
+        if browser is not None and browser_required:
+            rendered = _render_discovered_special_detail(
+                browser, site, period, timeout, documents
+            )
+            if rendered is not None:
+                return evaluate_site_period(site, period, rendered)
+        return evaluation
+
     if browser_required:
         if browser is None:
             if special_failure is not None:
