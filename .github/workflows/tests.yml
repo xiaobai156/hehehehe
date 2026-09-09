@@ -1,4 +1,4 @@
-name: Offline tests
+name: Tests
 
 on:
   push:
@@ -8,9 +8,19 @@ on:
 permissions:
   contents: read
 
+env:
+  PYTHONUTF8: '1'
+  PYTHONDONTWRITEBYTECODE: '1'
+
 jobs:
-  tests:
-    runs-on: ubuntu-latest
+  offline:
+    name: Offline (${{ matrix.os }}, Python ${{ matrix.python }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.10', '3.13']
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -18,20 +28,53 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-      - name: Install test dependencies
-        run: python -m pip install requests beautifulsoup4 pytest
-      - name: Snapshot tracked sources for reproducible verification
-        run: git archive --format=zip --output=source-snapshot.zip HEAD
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: python -m pip install -e ".[test]"
       - name: Compile
         run: python -m compileall -q he_app he_crawler.py he_duplicate_checker.py he_multi_period_crawler.py
-      - name: Tests
-        run: python -m pytest -q --junitxml=test-results.xml
+      - name: Import all entry points
+        run: python -c "import he_crawler; import he_duplicate_checker; import he_multi_period_crawler; import he_app.api"
+      - name: Static checks
+        run: python -m ruff check he_app tests he_crawler.py he_duplicate_checker.py he_multi_period_crawler.py
+      - name: Offline regressions
+        run: python -m pytest -q -m "not browser" --junitxml=test-results.xml
+      - name: Record environment
+        if: always()
+        run: python -m pip freeze > verification-environment.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: offline-verification
+          name: offline-${{ matrix.os }}-${{ matrix.python }}
           path: |
-            source-snapshot.zip
             test-results.xml
-          retention-days: 3
+            verification-environment.txt
+          retention-days: 7
+
+  browser:
+    name: Real browser smoke (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    env:
+      HE_TEST_BROWSER: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install
+        run: python -m pip install -e ".[test,browser]"
+      - name: Start browser and read local HTML only
+        run: python -m pytest -q -m browser --junitxml=test-results-browser.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-${{ matrix.os }}
+          path: test-results-browser.xml
+          retention-days: 7
