@@ -16,6 +16,25 @@ from he_app.services.single_period import evaluate_site_period
 
 
 Outcome = tuple[int, Site, str | None, str, str | None, list[str], str | None]
+MATCHED_PERIOD_PREFIX = "__matched_period__:"
+
+
+def matched_period_from_reason(requested_period: int, reason: str | None) -> int:
+    """Return the strict period that produced a successful result.
+
+    Existing callers use the final tuple field as failure metadata.  Successful
+    exact-period results still keep it as ``None``.  A successful next-period
+    fallback records one private marker here so cache sync can write the value
+    under its real issue number without changing the public success TXT format.
+    """
+
+    if not reason or not reason.startswith(MATCHED_PERIOD_PREFIX):
+        return requested_period
+    raw = reason[len(MATCHED_PERIOD_PREFIX):].strip()
+    if not raw.isdigit():
+        return requested_period
+    matched = int(raw)
+    return matched if matched == requested_period + 1 else requested_period
 
 
 def build_mirror_urls(site: Site, all_sites: list[Site], limit: int) -> list[str]:
@@ -28,13 +47,15 @@ def build_mirror_url_map(sites: list[Site], limit: int) -> dict[int, list[str]]:
     return {i: build_mirror_urls(site, sites, limit) for i, site in enumerate(sites)}
 
 
-def scrape_site(
+def _scrape_exact_site(
     session: requests.Session,
     site: Site,
     period: int,
     timeout: int,
     browser: BrowserClient | None = None,
 ) -> tuple[str | None, str, list[str], str | None]:
+    """Run the unchanged strict parser for exactly one issue number."""
+
     try:
         documents = collect_special_documents(session, site, timeout, period)
     except SiteScrapeFailure as exc:
@@ -66,31 +87,38 @@ def scrape_site(
     return evaluate_site_period(site, period, documents)
 
 
+def scrape_site(
+    session: requests.Session,
+    site: Site,
+    period: int,
+    timeout: int,
+    browser: BrowserClient | None = None,
+) -> tuple[str | None, str, list[str], str | None]:
+    """Accept the requested issue, or only its immediate next issue at the same edge.
+
+    The strict parser is executed independently for each issue.  Therefore a
+    ``top`` site can accept ``period + 1`` only when that issue is the physical
+    top boundary; a ``bottom`` site can accept it only when it is the physical
+    bottom boundary.  Interior rows are never searched as a rescue path.
+    """
+
+    requested = _scrape_exact_site(session, site, period, timeout, browser)
+    if requested[0] is not None:
+        return requested
+
+    next_period = period + 1
+    following = _scrape_exact_site(session, site, next_period, timeout, browser)
+    if following[0] is None:
+        return requested
+
+    result, detail, values, _reason = following
+    return result, detail, values, f"{MATCHED_PERIOD_PREFIX}{next_period}"
+
+
 def scrape_site_with_browser(
     session: requests.Session, site: Site, period: int, timeout: int, browser: BrowserClient
 ) -> tuple[str | None, str, list[str], str | None]:
-    try:
-        documents = collect_special_documents(session, site, timeout, period)
-    except SiteScrapeFailure as exc:
-        return None, exc.reason, [], exc.category
-    if documents is not None:
-        return evaluate_site_period(site, period, documents)
-
-    try:
-        probed = try_http_current(session, site, period, min(timeout, 8))
-    except Exception:
-        probed = None
-    if probed is not None:
-        _documents, evaluation = probed
-        return evaluation
-
-    documents = browser.get_documents(
-        site.url,
-        period,
-        site.click_first,
-        timeout,
-    )
-    return evaluate_site_period(site, period, documents)
+    return scrape_site(session, site, period, timeout, browser)
 
 
 def scrape_http_site(
