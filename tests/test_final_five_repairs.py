@@ -2,7 +2,9 @@ import pytest
 
 from he_app.domain.errors import SiteScrapeFailure
 from he_app.domain.models import Site
-from he_app.services import crawler
+from he_app.fetch.http import FetchedText
+from he_app.fetch.url_policy import ResolvedOrigin
+from he_app.services import adaptive_fetch, crawler
 from he_app.services.browser_policy import (
     BROWSER_RENDER_REQUIRED_SITE_IDS,
     runtime_click_first,
@@ -17,6 +19,7 @@ def _site(site_id: str, *, browser: bool = False, click_first: bool = False) -> 
             "s051_topic_702074": "坐收其利",
             "s065_topic_437721": "鸡飞蛋打",
             "s108_topic_1024380": "命中劫",
+            "s124_22_868393c_art_zhuanqu_8129": "月落乌江",
             "s129_topic_732154": "大家发",
         }.get(site_id, "测试站"),
         url="https://example.test/topic/1.html",
@@ -178,3 +181,58 @@ def test_non_renderer_timeout_is_not_retried(monkeypatch) -> None:
     assert calls["count"] == 1
     assert browser.closed == 0
     assert browser.started == 0
+
+
+class _TwoAddressPolicy:
+    def resolve(self, _url):
+        return ResolvedOrigin(
+            "https",
+            "example.test",
+            443,
+            ("1.1.1.1", "8.8.8.8"),
+        )
+
+
+def test_tls_fallback_tries_next_prevalidated_address_only_after_transport_error(monkeypatch) -> None:
+    site = _site("s124_22_868393c_art_zhuanqu_8129")
+    calls = []
+    monkeypatch.setattr(
+        adaptive_fetch,
+        "StrictNetworkPolicy",
+        lambda require_peer=False: _TwoAddressPolicy(),
+    )
+
+    def fetch(url, timeout, resolved):
+        calls.append(resolved.addresses[0])
+        if len(calls) == 1:
+            raise RuntimeError("curl exit 35: certificate expired on this backend")
+        return FetchedText("<html>ok</html>", final_url=url, status_code=200)
+
+    monkeypatch.setattr(adaptive_fetch, "fetch_text_with_curl", fetch)
+
+    documents = adaptive_fetch._curl_tls_fallback(site, 20)
+
+    assert calls == ["1.1.1.1", "8.8.8.8"]
+    assert len(documents) == 1
+    assert documents[0].resolved_addresses == ("8.8.8.8",)
+
+
+def test_tls_fallback_does_not_hide_real_http_error_by_switching_backend(monkeypatch) -> None:
+    site = _site("s124_22_868393c_art_zhuanqu_8129")
+    calls = []
+    monkeypatch.setattr(
+        adaptive_fetch,
+        "StrictNetworkPolicy",
+        lambda require_peer=False: _TwoAddressPolicy(),
+    )
+
+    def fetch(_url, _timeout, resolved):
+        calls.append(resolved.addresses[0])
+        raise RuntimeError("HTTP Error 404: curl未取得有效2xx响应")
+
+    monkeypatch.setattr(adaptive_fetch, "fetch_text_with_curl", fetch)
+
+    with pytest.raises(RuntimeError, match="HTTP Error 404"):
+        adaptive_fetch._curl_tls_fallback(site, 20)
+
+    assert calls == ["1.1.1.1"]
