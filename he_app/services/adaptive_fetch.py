@@ -43,7 +43,7 @@ for _site_id in _RUNTIME_NO_LOCATOR_SITE_IDS:
 
 
 def _curl_tls_fallback(site: Site, timeout: int) -> list[str]:
-    """Retry a TLS-handshake failure with curl while keeping certificate checks."""
+    """Retry transport with curl while preserving DNS pinning and TLS checks."""
 
     resolved = StrictNetworkPolicy(require_peer=False).resolve(site.url)
     text = fetch_text_with_curl(site.url, float(timeout), resolved)
@@ -61,6 +61,21 @@ def _curl_tls_fallback(site: Site, timeout: int) -> list[str]:
             resolved_addresses=tuple(resolved.addresses),
         )
     ]
+
+
+def _peer_socket_unobservable(exc: SiteScrapeFailure) -> bool:
+    """True only when requests cannot expose the socket peer for verification.
+
+    Curl is then safe as a compatibility transport because ``--resolve`` pins
+    the connection to the already-validated DNS address while certificate
+    verification remains enabled. Other identity failures must still fail
+    closed.
+    """
+
+    return (
+        exc.category == "站点身份错误"
+        and "无法验证实际连接地址" in exc.reason
+    )
 
 
 def collect_http_documents(
@@ -82,6 +97,10 @@ def collect_http_documents(
         # Transport compatibility only: curl still verifies TLS and is pinned
         # to the already-validated public address. No -k or cross-host rescue.
         return _curl_tls_fallback(site, timeout)
+    except SiteScrapeFailure as exc:
+        if _peer_socket_unobservable(exc):
+            return _curl_tls_fallback(site, timeout)
+        raise
 
 
 def collect_forum_documents_by_url_identity(
