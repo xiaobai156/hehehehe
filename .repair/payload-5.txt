@@ -1,0 +1,110 @@
+@file 爬虫-每天杀一合 - 检测重复.bat
+@before 076d17464a692c8462c56b10d96a27c8418b7677ba22f356361e6cda684f1293
+@after bdfdb2f1fc4072420820201eb3883be49cc376fcb305ecfbe224af3c0e329f15
+@edit 2 8 13
+chcp 65001 >nul
+cd /d "%~dp0"
+set "PY_EXE="
+set "PY_ARGS="
+if exist ".venv\Scripts\python.exe" set "PY_EXE=%CD%\.venv\Scripts\python.exe"
+if not defined PY_EXE (
+  py -3 --version >nul 2>nul
+  if not errorlevel 1 (
+    set "PY_EXE=py"
+    set "PY_ARGS=-3"
+  )
+)
+if not defined PY_EXE (
+@edit 9 10 1
+  if not errorlevel 1 set "PY_EXE=python"
+@edit 11 14 2
+if not defined PY_EXE (
+  if exist "%LocalAppData%\Programs\Python\Python310\python.exe" set "PY_EXE=%LocalAppData%\Programs\Python\Python310\python.exe"
+@edit 15 18 2
+if not defined PY_EXE (
+  echo Cannot find Python 3.10 or newer.
+@edit 22 26 10
+:input_period
+set "PERIOD="
+set /p "PERIOD=Input period: "
+"%PY_EXE%" %PY_ARGS% -c "import os,sys; p=os.environ.get('PERIOD','').strip(); sys.exit(0 if p.isascii() and p.isdigit() and int(p)>0 else 2)"
+if errorlevel 1 (
+  echo Period must be a positive integer.
+  goto input_period
+)
+echo Checking period-specific duplicates...
+"%PY_EXE%" %PY_ARGS% he_duplicate_checker.py --period "%PERIOD%" --workers 8
+@edit 27 28 0
+@edit 30 31 0
+@end
+@file 爬虫-每天杀一合-多期.bat
+@before 76d67d5bf23d56e4f63415af698882a89c53db0576bfb188cc41a0dd98b63f0f
+@after 87829b25ab6225727da9c8ad2f09a88c5323e5ad3ec9cc011461b8b3a26c518c
+@edit 2 8 13
+chcp 65001 >nul
+cd /d "%~dp0"
+set "PY_EXE="
+set "PY_ARGS="
+if exist ".venv\Scripts\python.exe" set "PY_EXE=%CD%\.venv\Scripts\python.exe"
+if not defined PY_EXE (
+  py -3 --version >nul 2>nul
+  if not errorlevel 1 (
+    set "PY_EXE=py"
+    set "PY_ARGS=-3"
+  )
+)
+if not defined PY_EXE (
+@edit 9 10 1
+  if not errorlevel 1 set "PY_EXE=python"
+@edit 11 14 2
+if not defined PY_EXE (
+  if exist "%LocalAppData%\Programs\Python\Python310\python.exe" set "PY_EXE=%LocalAppData%\Programs\Python\Python310\python.exe"
+@edit 15 18 2
+if not defined PY_EXE (
+  echo Cannot find Python 3.10 or newer.
+@edit 22 25 0
+@edit 27 28 0
+@edit 29 31 3
+"%PY_EXE%" %PY_ARGS% -c "import os,sys; ps=os.environ.get('PERIODS','').split(); sys.exit(0 if ps and all(p.isascii() and p.isdigit() and int(p)>0 for p in ps) else 2)"
+if errorlevel 1 (
+  echo Periods must be positive integers separated by spaces.
+@edit 33 44 1
+"%PY_EXE%" %PY_ARGS% he_multi_period_crawler.py %PERIODS%
+@edit 45 46 0
+@end
+@file 爬虫-每天杀一合.bat
+@before 25eabfdbf1bc935fe9eee2e1167baffe29039dc48099a3feeeced88b2b05042f
+@after c0d369732d2e56f5151d1f0c6bf3bd75f4405ce6c0ca7bf6063aaa6e433e1906
+@edit 2 8 13
+chcp 65001 >nul
+cd /d "%~dp0"
+set "PY_EXE="
+set "PY_ARGS="
+if exist ".venv\Scripts\python.exe" set "PY_EXE=%CD%\.venv\Scripts\python.exe"
+if not defined PY_EXE (
+  py -3 --version >nul 2>nul
+  if not errorlevel 1 (
+    set "PY_EXE=py"
+    set "PY_ARGS=-3"
+  )
+)
+if not defined PY_EXE (
+@edit 9 10 1
+  if not errorlevel 1 set "PY_EXE=python"
+@edit 11 14 2
+if not defined PY_EXE (
+  if exist "%LocalAppData%\Programs\Python\Python310\python.exe" set "PY_EXE=%LocalAppData%\Programs\Python\Python310\python.exe"
+@edit 15 18 2
+if not defined PY_EXE (
+  echo Cannot find Python 3.10 or newer.
+@edit 22 25 0
+@edit 27 28 0
+@edit 29 32 3
+"%PY_EXE%" %PY_ARGS% -c "import os,sys; p=os.environ.get('PERIOD','').strip(); sys.exit(0 if p.isascii() and p.isdigit() and int(p)>0 else 2)"
+if errorlevel 1 (
+  echo Period must be a positive integer.
+@edit 34 41 0
+@edit 44 45 1
+"%PY_EXE%" %PY_ARGS% he_crawler.py --period "%PERIOD%" %RUN_MODE%
+@edit 46 47 0
+@end
