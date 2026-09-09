@@ -12,8 +12,19 @@ def _site(site_id: str, *, name: str = "测试站", url: str = "https://example.
     return Site(name, url, "top", browser, False, site_id)
 
 
-def test_three_verified_sites_disable_only_body_locator_requirement() -> None:
-    for site_id in ("s018_mm", "s048_979363", "s086_aa_959787m_136"):
+def test_verified_locator_only_sites_disable_only_body_locator_requirement() -> None:
+    verified = {
+        "s003_topic_193293",
+        "s014_topic_242281",
+        "s018_mm",
+        "s048_979363",
+        "s067_topic_291095",
+        "s074_topic_250885",
+        "s075_topic_250874",
+        "s086_aa_959787m_136",
+    }
+    assert adaptive_fetch._RUNTIME_NO_LOCATOR_SITE_IDS == verified
+    for site_id in verified:
         rule = site_rule(_site(site_id))
         assert rule.require_body_locator is False
         assert rule.anchor_pick == ""
