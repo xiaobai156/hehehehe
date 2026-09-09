@@ -3,7 +3,7 @@ import re
 from bs4 import BeautifulSoup
 
 from he_app.domain.models import CandidateEvidence, FailureInfo, ParseResult, Site
-from he_app.domain.policies import normalize_digit_text, normalize_text
+from he_app.domain.policies import normalize_digit_text, normalize_text, normalize_pick
 from he_app.parsers.common import (
     build_candidate_parts,
     build_latest_candidate_parts,
@@ -118,7 +118,9 @@ def _authority_groups(documents: list[str]) -> list[list[str]]:
 def _allowed_documents(site: Site, documents: list[str]) -> list[str]:
     allowed_fetch_kinds = site_rule(site).allowed_fetch_kinds
     if not allowed_fetch_kinds:
-        return documents
+        allowed_fetch_kinds = ("legacy", "http", "browser", "api")
+        if site.site_id == "s070_topic_246762" and not site.browser:
+            allowed_fetch_kinds += ("http-decoded", "script", "script-decoded")
     return [
         document
         for document in documents
@@ -159,17 +161,19 @@ def _candidate_segments(document: str, period: int) -> list[tuple[str, int, int]
     )
 
     segments: list[tuple[str, int, int]] = []
-    seen: set[str] = set()
+    seen: set[tuple[str, int, int]] = set()
     for chunk in chunks:
         candidates = split_period_segments(chunk, period)
         if not candidates and contains_exact_period(chunk, period):
             candidates = [chunk]
         for segment in candidates:
-            if segment in seen or len(segment) > 500:
+            if len(segment) > 500:
                 continue
-            seen.add(segment)
-            start = normalized_document.find(segment)
-            segments.append((segment, start, start + len(segment)))
+            for occurrence in re.finditer(re.escape(segment), normalized_document):
+                key = (segment, occurrence.start(), occurrence.end())
+                if key not in seen:
+                    seen.add(key)
+                    segments.append(key)
     return segments
 
 
@@ -277,14 +281,22 @@ def build_document_evidence(
     synthetic_detail_sites = {"s058_vkjwinyt", "s073_shuqhbq", "s085_kcvpleh"}
     evidence: list[CandidateEvidence] = []
     for index, document in enumerate(documents):
-        if article_id is not None and article_id not in document:
-            continue
-        text = BeautifulSoup(document, "html.parser").get_text(" ", strip=True) or document
+        soup = BeautifulSoup(document, "html.parser")
+        observed_id = getattr(document, "record_id", None)
+        if article_id is not None:
+            records = soup.select("article[data-manager-record-id]")
+            observed_ids = {str(node.get("data-manager-record-id")) for node in records}
+            if observed_id:
+                observed_ids.add(str(observed_id))
+            if observed_ids != {article_id}:
+                continue
+            observed_id = article_id
+        text = soup.get_text(" ", strip=True) or document
         normalized_document = normalize_digit_text(normalize_text(text))
         keyword = _dedicated_document_keyword(site, period, values, normalized_document)
         if keyword is None:
             continue
-        document_article_id = str(getattr(document, "record_id", "") or article_id or "") or None
+        document_article_id = str(observed_id) if observed_id else None
 
         if site.site_id == KAIJIANGFACAI_SITE_ID and len(values) == 1:
             bounds = _kaijiangfacai_evidence_bounds(document, period, values[0])
@@ -321,7 +333,16 @@ def build_document_evidence(
             continue
 
         matched_segment: tuple[str, int, int] | None = None
-        for segment, start, end in _candidate_segments(document, period):
+        segments = _candidate_segments(document, period)
+        normalized_detail = normalize_digit_text(normalize_text(detail))
+        exact = [item for item in segments if item[0] == normalized_detail]
+        if exact:
+            segments = exact
+        segments.sort(key=lambda item: (item[1], -len(item[0])),
+                      reverse=normalize_pick(site.pick) == "bottom")
+        for segment, start, end in segments:
+            if start < 0 or end <= start:
+                continue
             if not all(_contains_sum_value(segment, value) for value in values):
                 continue
             if site.site_id not in synthetic_detail_sites:
@@ -417,6 +438,18 @@ def parse_site_period(site: Site, period: int, documents: list[str]) -> ParseRes
         )
         evaluations.append((authority_documents, evaluation, strict_values, strict_lines))
 
+    for source_docs, source_eval, _values, _lines in evaluations:
+        source = source_docs[0]
+        authority = getattr(source, "authority_id", "legacy")
+        if (authority == "legacy" or getattr(source, "document_type", "") not in
+                {"html", "page-source", "manager-record", "json-record"}):
+            continue
+        if source_eval[0] is None and source_eval[3] in {"方向范围外", "超出范围", "候选冲突"}:
+            if any(item[1][0] is not None and
+                   getattr(item[0][0], "authority_id", "legacy") == authority
+                   for item in evaluations):
+                return ParseResult(False, failure=FailureInfo(source_eval[3], source_eval[1]))
+
     conflict = _cross_authority_conflict(site, period, evaluations)
     if conflict is not None:
         return ParseResult(False, failure=conflict)
@@ -448,7 +481,9 @@ def parse_site_period(site: Site, period: int, documents: list[str]) -> ParseRes
     result, detail, values, reason = evaluation
     if result is None:
         return ParseResult(False, failure=FailureInfo(reason or "未找到目标", detail))
-    if not values or any(not is_valid_sum_value(value) for value in values):
+    expected_count = 2 if site.site_id == "s085_kcvpleh" else site.value_count
+    if (len(values) != expected_count or len(set(values)) != len(values)
+            or any(not is_valid_sum_value(value) for value in values)):
         return ParseResult(False, failure=FailureInfo("字段校验未通过", f"{site.name} 返回了无效合数"))
 
     evidence = build_document_evidence(site, period, values, detail, authority_documents)

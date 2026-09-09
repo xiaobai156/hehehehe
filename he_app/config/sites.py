@@ -38,7 +38,10 @@ def load_sites(path: Path) -> list[Site]:
         name = item["name"].strip()
         url = item["url"].strip()
         raw_pick = item["pick"].strip()
-        pick = normalize_pick(raw_pick)
+        try:
+            pick = normalize_pick(raw_pick)
+        except ValueError as exc:
+            raise SiteConfigError(f"站点配置第{index}条 pick 非法: {raw_pick}") from exc
         parsed_url = urlparse(url)
         if not site_id or not name or parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
             raise SiteConfigError(f"站点配置第{index}条缺少合法 id/name/url: {path}")
@@ -52,7 +55,15 @@ def load_sites(path: Path) -> list[Site]:
             raise SiteConfigError(f"站点配置第{index}条重复站点身份: {name} {url} {pick}")
         used_ids.add(site_id)
         used_identities.add(identity)
-        sites.append(Site(name, url, pick, item["browser"], item["click_first"], site_id))
+        expected_count = 2 if site_id == "s085_kcvpleh" else 1
+        value_count = item.get("value_count", expected_count)
+        if type(value_count) is not int or value_count != expected_count:
+            raise SiteConfigError(f"站点配置第{index}条 value_count 必须为{expected_count}")
+        if item.get("top_period_exception") is not None:
+            raise SiteConfigError("不支持期数方向例外 top_period_exception")
+        sites.append(Site(name=name, url=url, pick=pick, browser=item["browser"],
+                          click_first=item["click_first"], site_id=site_id,
+                          value_count=value_count))
 
     return sites
 
@@ -66,6 +77,7 @@ def serialize_sites(sites: list[Site]) -> str:
             "pick": site.pick,
             "browser": site.browser,
             "click_first": site.click_first,
+            "value_count": site.value_count,
         }
         for site in sites
     ]

@@ -33,6 +33,12 @@ class Site:
     browser: bool = False
     click_first: bool = False
     site_id: str = ""
+    value_count: int = 1
+
+    def __post_init__(self) -> None:
+        # Preserve six-argument callers of the sole registered two-value site.
+        if self.site_id == "s085_kcvpleh" and self.value_count == 1:
+            object.__setattr__(self, "value_count", 2)
 
 
 @dataclass(frozen=True)

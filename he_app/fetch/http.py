@@ -1,5 +1,13 @@
+"""HTTP-first fetch with verified redirects, bounded bodies and one curl fallback.
+
+Requests' socket timeouts are NOT hard wall-clock task deadlines. The deadline
+here is cooperative; isolated worker deadlines bound complete duplicate jobs.
+"""
+import codecs
 import re
+import shutil
 import subprocess
+import time
 from contextlib import nullcontext
 from threading import Lock
 from urllib.parse import urlparse
@@ -7,15 +15,26 @@ from urllib.parse import urlparse
 import requests
 
 from he_app.domain.models import Site
-
+from he_app.fetch.url_policy import same_origin_url, url_origin
 
 DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
 }
+MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 CURL_VARIANT_BY_HOST: dict[str, int] = {}
 CURL_VARIANT_MEMORY_LOCK = Lock()
+
+
+class FetchedText(str):
+    def __new__(cls, text: str, *, final_url: str, status_code: int,
+                content_type: str = ""):
+        value = super().__new__(cls, text)
+        value.final_url = final_url
+        value.status_code = status_code
+        value.content_type = content_type
+        return value
 
 
 def host_key(url: str) -> str:
@@ -23,9 +42,7 @@ def host_key(url: str) -> str:
     return parsed.netloc or url
 
 
-def build_host_locks(
-    sites: list[Site], mirror_url_map: dict[int, list[str]] | None = None
-) -> dict[str, Lock]:
+def build_host_locks(sites: list[Site], mirror_url_map: dict[int, list[str]] | None = None) -> dict[str, Lock]:
     urls = [site.url for site in sites]
     if mirror_url_map:
         urls.extend(url for mirrors in mirror_url_map.values() for url in mirrors)
@@ -40,97 +57,86 @@ def create_session(host_locks: dict[str, Lock] | None = None) -> requests.Sessio
 
 
 def fetch_text(session: requests.Session, url: str, timeout: int) -> str:
-    network_lock = getattr(session, "_he_host_locks", {}).get(host_key(url))
-    with network_lock if network_lock is not None else nullcontext():
+    url_origin(url)
+    if timeout <= 0:
+        raise ValueError("timeout 必须为正数")
+    lock = getattr(session, "_he_host_locks", {}).get(host_key(url))
+    with lock if lock is not None else nullcontext():
+        deadline = time.monotonic() + timeout
         try:
             return fetch_text_fast(session, url, timeout)
-        except Exception as exc:
-            if is_deterministic_http_error(exc):
-                raise
-            return fetch_text_with_curl(url, timeout)
+        except (requests.exceptions.SSLError, requests.exceptions.Timeout):
+            raise
+        except requests.exceptions.ConnectionError:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("HTTP请求预算已耗尽")
+            # Curl is a transport compatibility fallback, never a TLS bypass.
+            return fetch_text_with_curl(url, remaining)
 
 
 def is_deterministic_http_error(exc: Exception) -> bool:
     match = re.search(r"HTTP Error (\d{3})", str(exc), re.I)
-    if match is None:
-        return False
-    status = int(match.group(1))
-    return 400 <= status < 500 and status not in {408, 409, 425, 429}
+    return bool(match and 400 <= int(match.group(1)) < 500
+                and int(match.group(1)) not in {408, 409, 425, 429})
 
 
-def fetch_text_fast(session: requests.Session, url: str, timeout: int) -> str:
-    response = session.get(url, timeout=timeout, verify=False, allow_redirects=True)
-    if not 200 <= response.status_code < 400:
-        raise RuntimeError(f"HTTP Error {response.status_code}: {http_status_label(response.status_code)}")
-    return decode_response_bytes(response.content, response.headers.get("Content-Type", ""))
+def fetch_text_fast(session: requests.Session, url: str, timeout: float) -> str:
+    deadline = time.monotonic() + timeout
+    current = url
+    for _ in range(6):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("HTTP请求预算已耗尽")
+        with session.get(current, timeout=remaining, allow_redirects=False, stream=True) as response:
+            final_url = same_origin_url(url, response.url)
+            if response.status_code in {301, 302, 303, 307, 308}:
+                location = response.headers.get("Location")
+                if not location:
+                    raise RuntimeError("HTTP重定向缺少Location")
+                current = same_origin_url(url, same_origin_url(final_url, location))
+                continue
+            if not 200 <= response.status_code < 300:
+                raise RuntimeError(f"HTTP Error {response.status_code}: {http_status_label(response.status_code)}")
+            content_type = response.headers.get("Content-Type", "")
+            body = bytearray()
+            for chunk in response.iter_content(chunk_size=16384):
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("HTTP响应读取预算已耗尽")
+                body.extend(chunk)
+                if len(body) > MAX_RESPONSE_BYTES:
+                    raise RuntimeError("HTTP响应超过8MiB上限")
+            return FetchedText(decode_response_bytes(bytes(body), content_type),
+                               final_url=final_url, status_code=response.status_code,
+                               content_type=content_type)
+    raise RuntimeError("HTTP重定向次数超过限制")
 
 
-def curl_base_command(url: str, timeout: int) -> list[str]:
-    return [
-        "curl.exe",
-        "-k",
-        "-L",
-        "--ipv4",
-        "--http1.1",
-        "--ssl-no-revoke",
-        "--connect-timeout",
-        str(max(5, min(timeout, 15))),
-        "--max-time",
-        str(max(10, timeout + 10)),
-        "-sS",
-        "-A",
-        DEFAULT_HEADERS["User-Agent"],
-        "-H",
-        "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "-H",
-        "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8",
-        "-H",
-        "Cache-Control: no-cache",
-        "-H",
-        "Pragma: no-cache",
-        "-H",
-        "Connection: close",
-    ]
+def curl_base_command(url: str, timeout: float) -> list[str]:
+    executable = shutil.which("curl.exe") or shutil.which("curl")
+    if executable is None:
+        raise RuntimeError("未安装curl，无法使用兼容传输")
+    # No -k, -L, protocol downgrade, or automatic retry. A curl-only redirect
+    # is rejected rather than followed before its destination can be checked.
+    return [executable, "--proto", "=http,https", "--http1.1", "--max-redirs", "0",
+            "--connect-timeout", str(min(timeout, 10.0)), "--max-time", str(timeout),
+            "--max-filesize", str(MAX_RESPONSE_BYTES), "-sS", "-A", DEFAULT_HEADERS["User-Agent"]]
 
 
-def curl_command_variants(url: str, timeout: int) -> list[list[str]]:
-    base = curl_base_command(url, timeout)
-    return [
-        base + ["--compressed", url],
-        base + ["--tls-max", "1.2", "--compressed", url],
-        base + ["--tlsv1.2", "--compressed", url],
-        base + [url],
-    ]
+def curl_command_variants(url: str, timeout: float) -> list[list[str]]:
+    return [curl_base_command(url, timeout) + ["--compressed", url]]
 
 
 def split_curl_http_status(raw: bytes) -> tuple[bytes, int | None]:
     marker = b"\n__HTTP_STATUS__:"
     if marker not in raw:
         return raw, None
-    body, status_bytes = raw.rsplit(marker, 1)
-    try:
-        return body, int(status_bytes.strip()[:3])
-    except ValueError:
-        return body, None
+    body, status = raw.rsplit(marker, 1)
+    return (body, int(status.strip())) if re.fullmatch(rb"\d{3}", status.strip()) else (body, None)
 
 
 def should_try_next_curl_variant(returncode: int, status: int | None, message: str) -> bool:
-    if returncode in {35, 56, 92}:
-        return True
-    if status in {502, 503, 520, 521, 522, 523, 524}:
-        return True
-    lowered = message.lower()
-    return any(
-        marker in lowered
-        for marker in (
-            "bad gateway",
-            "failed to receive handshake",
-            "ssl/tls connection failed",
-            "failure when receiving data",
-            "connection reset",
-            "connection closed",
-        )
-    )
+    return False
 
 
 def reset_curl_variant_memory() -> None:
@@ -138,73 +144,59 @@ def reset_curl_variant_memory() -> None:
         CURL_VARIANT_BY_HOST.clear()
 
 
-def fetch_text_with_curl(url: str, timeout: int) -> str:
-    last_error = "no curl attempt"
-    commands = curl_command_variants(url, timeout)
-    host = host_key(url)
-    with CURL_VARIANT_MEMORY_LOCK:
-        preferred = CURL_VARIANT_BY_HOST.get(host)
-    preferred_indices = [preferred] if preferred is not None and preferred < len(commands) else []
-    attempt_indices = preferred_indices + [index for index in range(len(commands)) if index != preferred]
-
-    for command_index in attempt_indices:
-        command = commands[command_index]
-        command = command[:-1] + ["-w", "\n__HTTP_STATUS__:%{http_code}", command[-1]]
-        completed = subprocess.run(command, capture_output=True, check=False, timeout=timeout + 15)
-        body, status = split_curl_http_status(completed.stdout)
-        stderr = decode_response_bytes(completed.stderr).strip()
-        stdout_text = decode_response_bytes(body).strip()
-        message = stderr or stdout_text[:300] or "no curl stderr"
-
-        if completed.returncode == 0 and status is not None and 200 <= status < 400:
-            with CURL_VARIANT_MEMORY_LOCK:
-                CURL_VARIANT_BY_HOST[host] = command_index
-            return decode_response_bytes(body, "")
-        if completed.returncode == 0 and status is None:
-            with CURL_VARIANT_MEMORY_LOCK:
-                CURL_VARIANT_BY_HOST[host] = command_index
-            return decode_response_bytes(body, "")
-
-        if completed.returncode == 0:
-            last_error = f"HTTP Error {status}: {http_status_label(status)}"
-        else:
-            last_error = f"curl exit {completed.returncode}: {message}"
-        if not should_try_next_curl_variant(completed.returncode, status, last_error):
-            break
-
-    raise RuntimeError(last_error)
+def fetch_text_with_curl(url: str, timeout: float) -> str:
+    url_origin(url)
+    command = curl_command_variants(url, timeout)[0]
+    command = command[:-1] + ["-w", "\n__HTTP_STATUS__:%{http_code}", command[-1]]
+    result = subprocess.run(command, capture_output=True, check=False, timeout=timeout)
+    body, status = split_curl_http_status(result.stdout)
+    if result.returncode:
+        # Lossy decoding is only for diagnostics, never for candidate content.
+        message = result.stderr.decode("utf-8", errors="replace")[:300]
+        raise RuntimeError(f"curl exit {result.returncode}: {message}")
+    if status is None or not 200 <= status < 300:
+        raise RuntimeError(f"HTTP Error {status}: curl未取得有效2xx响应")
+    if len(body) > MAX_RESPONSE_BYTES:
+        raise RuntimeError("curl响应超过8MiB上限")
+    return FetchedText(decode_response_bytes(body), final_url=url, status_code=status)
 
 
 def http_status_label(status: int | None) -> str:
-    labels = {
-        502: "Bad Gateway",
-        503: "Service Unavailable",
-        520: "Web Server Returned an Unknown Error",
-        521: "Web Server Is Down",
-        522: "Connection Timed Out",
-        523: "Origin Is Unreachable",
-        524: "A Timeout Occurred",
-    }
-    return labels.get(status, "HTTP request failed")
-
-
-def decode_response_bytes(data: bytes, content_type: str = "") -> str:
-    for encoding in parse_charset_candidates(content_type):
-        try:
-            return data.decode(encoding)
-        except UnicodeDecodeError:  # noqa: PERF203 - ordered decode fallback
-            continue
-    for encoding in ("utf-8", "gb18030", "big5"):
-        try:
-            return data.decode(encoding)
-        except UnicodeDecodeError:  # noqa: PERF203 - ordered decode fallback
-            continue
-    return data.decode("utf-8", errors="ignore")
+    return {502: "Bad Gateway", 503: "Service Unavailable", 520: "Unknown Error",
+            521: "Web Server Is Down", 522: "Connection Timed Out",
+            523: "Origin Is Unreachable", 524: "A Timeout Occurred"}.get(status, "HTTP request failed")
 
 
 def parse_charset_candidates(content_type: str) -> list[str]:
-    candidates: list[str] = []
-    match = re.search(r"charset=([A-Za-z0-9_-]+)", content_type or "", re.I)
-    if match:
-        candidates.append(match.group(1))
-    return candidates
+    match = re.search(r"charset\s*=\s*[\"']?([A-Za-z0-9_.-]+)", content_type or "", re.I)
+    return [match.group(1)] if match else []
+
+
+def decode_response_bytes(data: bytes, content_type: str = "") -> str:
+    if data.startswith(codecs.BOM_UTF8):
+        return data.decode("utf-8-sig")
+    if data.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        return data.decode("utf-16")
+    candidates = parse_charset_candidates(content_type)
+    head = data[:4096].decode("ascii", errors="ignore")
+    for meta in re.findall(r"<meta\b[^>]*>", head, re.I):
+        candidates.extend(parse_charset_candidates(meta))
+    if candidates:
+        for encoding in dict.fromkeys(candidates):
+            try:
+                return data.decode(encoding, errors="strict")
+            except (LookupError, UnicodeDecodeError):
+                continue
+        raise ValueError(f"响应声明的字符编码无法无损解码: {candidates}")
+    try:
+        return data.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        alternatives = set()
+        for encoding in ("gb18030", "big5"):
+            try:
+                alternatives.add(data.decode(encoding, errors="strict"))
+            except UnicodeDecodeError:
+                pass
+        if len(alternatives) == 1:
+            return alternatives.pop()
+        raise ValueError("响应编码不明确，拒绝有损或歧义解码") from None

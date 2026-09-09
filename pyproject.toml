@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "he-crawler"
+version = "0.1.0"
+description = "Strict single-period kill-sum document collector"
+requires-python = ">=3.10"
+dependencies = ["requests>=2.32,<3", "beautifulsoup4>=4.12,<5"]
+
+[project.optional-dependencies]
+browser = ["selenium>=4.20,<5"]
+test = ["pytest>=8,<10", "ruff>=0.9,<1"]
+
+[tool.setuptools.packages.find]
+include = ["he_app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["browser: local HTML in an actual browser; enabled by HE_TEST_BROWSER=1"]
+
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82"]

@@ -1,50 +1,43 @@
 @echo off
 setlocal EnableExtensions
-
-set "PY_CMD="
-py -3 --version >nul 2>nul
-if not errorlevel 1 set "PY_CMD=py -3"
-
-if not defined PY_CMD (
+chcp 65001 >nul
+cd /d "%~dp0"
+set "PY_EXE="
+set "PY_ARGS="
+if exist ".venv\Scripts\python.exe" set "PY_EXE=%CD%\.venv\Scripts\python.exe"
+if not defined PY_EXE (
+  py -3 --version >nul 2>nul
+  if not errorlevel 1 (
+    set "PY_EXE=py"
+    set "PY_ARGS=-3"
+  )
+)
+if not defined PY_EXE (
   python --version >nul 2>nul
-  if not errorlevel 1 set "PY_CMD=python"
+  if not errorlevel 1 set "PY_EXE=python"
 )
-
-if not defined PY_CMD (
-  if exist "%LocalAppData%\Programs\Python\Python310\python.exe" set "PY_CMD=%LocalAppData%\Programs\Python\Python310\python.exe"
+if not defined PY_EXE (
+  if exist "%LocalAppData%\Programs\Python\Python310\python.exe" set "PY_EXE=%LocalAppData%\Programs\Python\Python310\python.exe"
 )
-
-if not defined PY_CMD (
-  echo Cannot find Python. Please install Python or add it to PATH.
+if not defined PY_EXE (
+  echo Cannot find Python 3.10 or newer.
   pause
   exit /b 1
 )
 
-title Kill-He Crawler
-cd /d "%~dp0"
-
 :input_period
 set "PERIOD="
-echo.
 set /p "PERIOD=Input period: "
-set "PERIOD=%PERIOD: =%"
-if not defined PERIOD (
-  echo Period cannot be empty.
+"%PY_EXE%" %PY_ARGS% -c "import os,sys; p=os.environ.get('PERIOD','').strip(); sys.exit(0 if p.isascii() and p.isdigit() and int(p)>0 else 2)"
+if errorlevel 1 (
+  echo Period must be a positive integer.
   goto input_period
 )
-for /f "delims=0123456789" %%A in ("%PERIOD%") do (
-  echo Period must be numbers only.
-  goto input_period
-)
-
-echo.
-echo Running period %PERIOD% ...
 choice /c NF /n /m "抓取模式：N=全站，F=仅重抓失败TXT站点："
 set "RUN_MODE="
 if errorlevel 2 set "RUN_MODE=--retry-failures"
-%PY_CMD% he_crawler.py --period %PERIOD% %RUN_MODE%
+"%PY_EXE%" %PY_ARGS% he_crawler.py --period "%PERIOD%" %RUN_MODE%
 set "EXIT_CODE=%ERRORLEVEL%"
-
 echo.
 echo Finished. Exit code: %EXIT_CODE%
 pause

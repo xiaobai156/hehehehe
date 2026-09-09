@@ -132,8 +132,9 @@ def test_runner_updates_cache_and_marks_failed_sites_above_threshold(tmp_path: P
 
     payload = json.loads(cache_path.read_text(encoding="utf-8"))
     assert payload["base_period"] == 211
-    assert len(payload["sites"]) == 6
-    assert all(item["fingerprint"] == {"211": f"{index:02d}合"} for index, item in enumerate(payload["sites"], 1))
+    assert len(payload["sites"]) == 7
+    assert payload["sites"][0]["fingerprint"] == {}
+    assert all(item["fingerprint"] == {"211": f"{index:02d}合"} for index, item in enumerate(payload["sites"][1:], 1))
     assert payload["errors"][0]["id"] == "threshold-1"
     assert payload["errors"][0]["status"] == "失败"
     assert payload["errors"][0]["period"] == 211

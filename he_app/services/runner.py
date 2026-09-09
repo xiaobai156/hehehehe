@@ -1,15 +1,13 @@
 import argparse
+import os
 import re
 import sys
 import time
-import warnings
 from contextlib import ExitStack
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from threading import Lock
 
-import requests
-from requests.packages.urllib3.exceptions import InsecureRequestWarning
 
 from he_app.config.settings import (
     DEFAULT_DUPLICATE_FINGERPRINT_CACHE,
@@ -26,6 +24,7 @@ from he_app.observability.progress import (
     format_completion_progress,
     format_progress_prefix,
 )
+from he_app.services.document_sources import requires_browser
 from he_app.services.crawler import (
     build_mirror_url_map,
     print_outcome,
@@ -48,6 +47,7 @@ from he_app.storage.reports import (
     merge_success_output_lines,
 )
 from he_app.storage.reports import FAILURE_SITE_ID_RE
+from he_app.storage.failure_records import parse_failure_records, serialize_failure_record
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -87,27 +87,13 @@ def consume_site_future(future, site: Site, fallback_index: int):
         return fallback_index, site, None, "", f"{type(exc).__name__}: {exc}", [], None, 0.0
 
 def _normalize_legacy_failures(text: str, sites: list[Site]) -> str:
-    if not text:
-        return text
-    resolved = []
-    body = text.lstrip("\ufeff").split("\n\n失败分类统计", 1)[0]
-    for record in re.split(r"\r?\n\r?\n", body):
-        if not record.strip():
-            continue
-        if FAILURE_SITE_ID_RE.search(record):
-            resolved.append(record)
-            continue
-        name = re.search(r"失败\s+(.+?)\s+https?://", record)
-        url = re.search(r"(https?://\S+)", record)
-        pick = re.search(r"方向:\s*(\w+)", record)
-        candidates = [s for s in sites if name and url and pick and s.name == name.group(1).strip() and s.url == url.group(1) and s.pick == pick.group(1)]
-        if len(candidates) != 1:
-            raise SystemExit(f"失败TXT记录无法唯一匹配站点: {record.splitlines()[0]}")
-        resolved.append(record.replace(url.group(1), f"站点ID: {candidates[0].site_id} {url.group(1)}", 1))
-    return "\n\n".join(resolved)
+    return "\n\n".join(serialize_failure_record(record)
+                        for record in parse_failure_records(text, sites))
 
 
 def run(args: argparse.Namespace) -> int:
+    defaults = build_arg_parser().parse_args(["--period", str(args.period)])
+    args = argparse.Namespace(**(vars(defaults) | vars(args)))
     if args.period < 1:
         raise SystemExit("--period 必须为正整数")
     if args.timeout < 1:
@@ -126,9 +112,23 @@ def run(args: argparse.Namespace) -> int:
     )
     sites_path = Path(args.sites).resolve()
     sites = load_sites(sites_path)
+    configured_sites = list(sites)
+    fingerprint_cache_path = Path(args.fingerprint_cache).resolve()
+    active_paths = [success_path, fail_path]
+    if not args.no_fingerprint_cache_sync:
+        active_paths.append(fingerprint_cache_path)
+    if len(set(active_paths)) != len(active_paths) or sites_path in active_paths:
+        raise SystemExit("输出路径必须互不相同，且不能覆盖站点配置")
+    if (sites_path != Path(SITES_FILE).resolve()
+            and fingerprint_cache_path == Path(DEFAULT_DUPLICATE_FINGERPRINT_CACHE).resolve()
+            and not args.no_fingerprint_cache_sync):
+        raise SystemExit("自定义站点配置禁止写入正式指纹缓存；请使用 --no-fingerprint-cache-sync 或隔离缓存路径")
     if args.retry_failures:
         failure_text = fail_path.read_text(encoding="utf-8-sig") if fail_path.exists() else ""
         failure_text = _normalize_legacy_failures(failure_text, sites)
+        if not failure_text:
+            print(f"[INFO] 未找到 {args.period}期失败站点，未执行抓取")
+            return 0
         period_values = re.findall(r"期数:\s*(\d+)", failure_text)
         if not period_values:
             raise SystemExit("失败TXT格式无有效期数记录")
@@ -183,14 +183,23 @@ def run(args: argparse.Namespace) -> int:
     completed_count = success_count = fail_count = 0
     site_timings: list[tuple[str, float, bool]] = []
     browser_pool_size = default_browser_pool_size(sites, workers)
+    has_http = any(not requires_browser(site) for site in sites)
+    split_pools = has_http and browser_pool_size > 0 and workers > 1
+    if split_pools:
+        browser_pool_size = min(browser_pool_size, workers - 1)
     browser_pool = BrowserPool(browser_pool_size, headless=not args.show_browser) if browser_pool_size else None
     try:
-        with ThreadPoolExecutor(max_workers=workers) as executor:
+        with ExitStack() as executors:
+            http_workers = workers - browser_pool_size if split_pools else workers
+            executor = executors.enter_context(ThreadPoolExecutor(max_workers=http_workers))
+            browser_executor = (executors.enter_context(ThreadPoolExecutor(max_workers=browser_pool_size))
+                                if split_pools else executor)
             future_map = {}
             total_sites = len(all_sites)
             for index, site in all_sites:
                 print(f"{format_progress_prefix(index, total_sites)} [START] {site.name} ({site.pick})")
-                future = executor.submit(
+                selected_executor = browser_executor if requires_browser(site) else executor
+                future = selected_executor.submit(
                     run_timed_parallel_site,
                     index,
                     site,
@@ -233,10 +242,13 @@ def run(args: argparse.Namespace) -> int:
         sites, outcomes, args.period
     )
     with ExitStack() as output_locks:
-        for path in sorted({success_path, fail_path}, key=lambda p: str(p).casefold()):
+        for path in sorted({success_path, fail_path}, key=lambda p: os.path.normcase(str(p))):
             output_locks.enter_context(exclusive_path_lock(path))
         existing_success = success_path.read_text(encoding="utf-8-sig") if success_path.exists() else ""
         if args.append_success:
+            configured_names = [site.name for site in configured_sites]
+            if len(set(configured_names)) != len(configured_names):
+                raise ValueError("成功TXT无法按名称唯一解析站点，禁止追加")
             success_output = merge_success_output_lines(existing_success, success_lines)
         else:
             success_output = build_success_output_lines(success_lines, ranking_values)
@@ -249,7 +261,7 @@ def run(args: argparse.Namespace) -> int:
                 if result
             }
             failure_output = merge_failure_output(
-                existing_failure,
+                _normalize_legacy_failures(existing_failure, configured_sites),
                 fail_lines,
                 successful_site_ids,
             )
@@ -302,6 +314,4 @@ def run(args: argparse.Namespace) -> int:
 
 def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")
-    warnings.simplefilter("ignore", InsecureRequestWarning)
-    requests.packages.urllib3.disable_warnings()
     raise SystemExit(run(build_arg_parser().parse_args()))

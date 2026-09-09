@@ -4,28 +4,28 @@ import multiprocessing
 import queue
 import sys
 import time
-import warnings
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
 
-import requests
-from requests.packages.urllib3.exceptions import InsecureRequestWarning
 
 from he_app.config.settings import CACHE_FILE, SITES_FILE
 from he_app.config.sites import load_sites
+from he_app.domain.errors import FingerprintCacheError
 from he_app.domain.models import Site
 from he_app.domain.policies import normalize_pick
 from he_app.fetch.browser import BrowserClient, BrowserPool
 from he_app.fetch.discovery import collect_documents
 from he_app.fetch.http import build_host_locks, create_session, host_key
 from he_app.parsers.common import format_failure_result
-from he_app.services.crawler import apply_cached_urls
-from he_app.services.document_sources import collect_special_site_documents
+from he_app.services.document_sources import collect_special_site_documents, requires_browser
 from he_app.services.fingerprint import build_site_fingerprint
-from he_app.storage.atomic_write import exclusive_path_lock, write_text_atomic_unlocked
-from he_app.storage.success_cache import load_cached_url_by_site
+from he_app.storage.atomic_write import exclusive_path_lock, write_text_atomic_unlocked, commit_text_transaction
+from he_app.storage.recent_cache import (
+    read_validated_fingerprints, write_history_fingerprints, load_recent_cache,
+    validate_recent_cache_identity, validate_cache_freshness,
+)
 
 
 Fingerprint = dict[int, str]
@@ -122,73 +122,7 @@ def write_fingerprint_cache(
     periods: int,
     lock_timeout: float = 30.0,
 ) -> None:
-    with fingerprint_cache_lock(path, timeout=lock_timeout):
-        _write_fingerprint_cache_unlocked(path, sites, fingerprints, errors, period, periods)
-
-
-def _write_fingerprint_cache_unlocked(
-    path: Path,
-    sites: list[Site],
-    fingerprints: dict[int, Fingerprint],
-    errors: dict[int, str],
-    period: int,
-    periods: int,
-) -> None:
-    payload = {
-        "base_period": period,
-        "periods": periods,
-        "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "sites": [],
-        "errors": [],
-    }
-    previous_by_key: dict[str, Fingerprint] = {}
-    if path.exists():
-        previous_sites, previous_fingerprints, _previous_errors = load_fingerprint_cache(path, period, periods)
-        for index, previous_site in enumerate(previous_sites):
-            fingerprint = previous_fingerprints.get(index, {})
-            for key in (previous_site.site_id, previous_site.url):
-                if key:
-                    previous_by_key[key] = fingerprint
-
-    for index, site in enumerate(sites):
-        fingerprint = trim_fingerprint(fingerprints.get(index, {}), period, periods)
-        if not fingerprint:
-            fingerprint = trim_fingerprint(
-                previous_by_key.get(site.site_id) or previous_by_key.get(site.url) or {},
-                period,
-                periods,
-            )
-        if not fingerprint:
-            continue
-        payload["sites"].append(
-            {
-                "id": site.site_id,
-                "name": site.name,
-                "url": site.url,
-                "pick": site.pick,
-                "browser": site.browser,
-                "click_first": site.click_first,
-                "fingerprint": {str(key): value for key, value in fingerprint.items()},
-            }
-        )
-    for index, error in sorted(errors.items()):
-        site = sites[index]
-        if trim_fingerprint(
-            previous_by_key.get(site.site_id) or previous_by_key.get(site.url) or {},
-            period,
-            periods,
-        ):
-            continue
-        payload["errors"].append(
-            {
-                "id": site.site_id,
-                "name": site.name,
-                "url": site.url,
-                "error": error,
-            }
-        )
-
-    write_text_atomic(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_history_fingerprints(path, sites, fingerprints, errors, period, periods, lock_timeout)
 
 
 @contextmanager
@@ -205,52 +139,17 @@ def write_text_atomic(path: Path, text: str, encoding: str) -> None:
 
 
 def load_fingerprint_cache(path: Path, period: int, periods: int) -> tuple[list[Site], dict[int, Fingerprint], dict[int, str]]:
-    data = json.loads(path.read_text(encoding="utf-8-sig"))
-    sites: list[Site] = []
-    fingerprints: dict[int, Fingerprint] = {}
-    errors: dict[int, str] = {}
-
-    for item in data.get("sites", []):
-        if not isinstance(item, dict):
-            continue
-        site = Site(
-            str(item.get("name", "")).strip(),
-            str(item.get("url", "")).strip(),
-            normalize_pick(str(item.get("pick", "top"))),
-            bool(item.get("browser", False)),
-            bool(item.get("click_first", False)),
-            str(item.get("id", "")).strip(),
-        )
-        raw_fingerprint = item.get("fingerprint", {})
-        if not site.name or not site.url or not isinstance(raw_fingerprint, dict):
-            continue
-        fingerprint = trim_fingerprint(
-            {
-                int(current_period): str(value)
-                for current_period, value in raw_fingerprint.items()
-                if str(current_period).isdigit() and value
-            },
-            period,
-            periods,
-        )
-        if not fingerprint:
-            continue
-        fingerprints[len(sites)] = fingerprint
-        sites.append(site)
-
-    for item in data.get("errors", []):
-        if isinstance(item, dict):
-            errors[len(sites) + len(errors)] = str(item.get("error", "未抓到可参与重复检测的数据"))
-
-    return sites, fingerprints, errors
+    return read_validated_fingerprints(path, period, periods)
 
 
 def load_compare_cache(
     path: Path,
     requested_period: int,
     periods: int,
+    max_age_hours: float = 24.0,
 ) -> tuple[int, list[Site], dict[int, Fingerprint], dict[int, str]]:
-    data = json.loads(path.read_text(encoding="utf-8-sig"))
+    data = load_recent_cache(path)
+    validate_cache_freshness(data, max_age_hours)
     base_period = data.get("base_period")
     if not isinstance(base_period, int) or isinstance(base_period, bool) or base_period < 1:
         raise ValueError("--compare-cache 缓存缺少有效整数 base_period")
@@ -341,10 +240,10 @@ def scrape_http_fingerprint(
     host_locks: dict[str, Lock] | None = None,
 ) -> tuple[int, Fingerprint | None, str | None]:
     try:
-        session = create_session(host_locks)
-        documents = collect_special_site_documents(session, site, timeout)
-        if documents is None:
-            documents = collect_documents(session, site.url, timeout)
+        with create_session(host_locks) as session:
+            documents = collect_special_site_documents(session, site, timeout, period)
+            if documents is None:
+                documents = collect_documents(session, site.url, timeout)
         fingerprint = build_fingerprint(site, documents, period, periods)
         if not fingerprint:
             raise ValueError("未抓到可参与重复检测的数据")
@@ -362,9 +261,8 @@ def scrape_browser_fingerprint(
     host_locks: dict[str, Lock] | None = None,
 ) -> tuple[Fingerprint | None, str | None]:
     try:
-        documents = collect_special_site_documents(
-            create_session(host_locks), site, timeout
-        )
+        with create_session(host_locks) as session:
+            documents = collect_special_site_documents(session, site, timeout, period)
         if documents is None:
             documents = browser.get_documents(site.url, period, site.click_first, timeout)
         fingerprint = build_fingerprint(site, documents, period, periods)
@@ -385,7 +283,7 @@ def scrape_fingerprint(
     host_locks: dict[str, Lock] | None = None,
 ) -> tuple[int, Fingerprint | None, str | None]:
     try:
-        if site.browser:
+        if requires_browser(site):
             pool = BrowserPool(1, headless=not show_browser)
             pool.start()
             try:
@@ -406,7 +304,7 @@ def scrape_fingerprint(
 
 
 def browser_worker_count(sites: list[Site], workers: int) -> int:
-    return min(3, max(1, workers), sum(1 for site in sites if site.browser))
+    return min(3, max(1, workers), sum(1 for site in sites if requires_browser(site)))
 
 
 def _run_isolated_worker(
@@ -420,8 +318,6 @@ def _run_isolated_worker(
     host_locks,
     browser_worker: bool,
 ) -> None:
-    warnings.simplefilter("ignore", InsecureRequestWarning)
-    requests.packages.urllib3.disable_warnings()
     browser_pool = None
     try:
         if browser_worker and worker_callable is scrape_fingerprint:
@@ -530,10 +426,16 @@ def run_fingerprint_jobs(
     lock_keys = set(host_locks) | {host_key(site.url) for _, site in all_sites}
     process_host_locks = {key: manager.Lock() for key in lock_keys if key}
     result_queue = context.Queue()
-    browser_jobs = [(index, site) for index, site in all_sites if site.browser]
-    http_jobs = [(index, site) for index, site in all_sites if not site.browser]
+    browser_jobs = [(index, site) for index, site in all_sites if requires_browser(site)]
+    http_jobs = [(index, site) for index, site in all_sites if not requires_browser(site)]
     browser_slots = browser_worker_count([site for _, site in all_sites], workers)
-    http_slots = min(max(1, workers), len(http_jobs)) if http_jobs else 0
+    if browser_jobs and http_jobs and workers > 1:
+        browser_slots = min(browser_slots, workers - 1)
+    http_slots = min(max(1, workers - browser_slots), len(http_jobs)) if http_jobs else 0
+    if workers == 1 and browser_jobs and http_jobs:
+        http_jobs = list(all_sites)
+        browser_jobs = []
+        browser_slots, http_slots = 0, 1
     slots = [
         _start_process_slot(
             context, result_queue, worker_callable, period, periods, timeout,
@@ -555,7 +457,7 @@ def run_fingerprint_jobs(
         token = next_token
         next_token += 1
         slot["current"] = (token, index, site)
-        slot["started_at"] = None
+        slot["started_at"] = time.monotonic()
         token_to_slot[token] = slot
         print(f"[START] {site.name} ({site.pick})")
         slot["queue"].put((token, index, site))
@@ -573,7 +475,8 @@ def run_fingerprint_jobs(
             if message is not None and token in token_to_slot:
                 slot = token_to_slot[token]
                 if message == "started":
-                    slot["started_at"] = time.monotonic()
+                    # Keep the assignment deadline; startup is part of the task.
+                    pass
                 else:
                     _token, index, site = slot["current"]
                     token_to_slot.pop(token, None)
@@ -640,8 +543,14 @@ def is_recent_fingerprint_cache_path(cache_arg: str) -> bool:
 
 
 def validate_duplicate_checker_args(args: argparse.Namespace) -> None:
+    if args.period < 1 or args.timeout <= 0 or args.workers < 1:
+        raise SystemExit("期数、超时和并发必须为正数")
     if args.periods < 1:
         raise SystemExit("--periods 必须大于等于 1")
+    if args.mirror_limit:
+        raise SystemExit("自动拼接镜像已停用")
+    if args.compare_cache and args.cache_max_age_hours <= 0:
+        raise SystemExit("比较缓存有效期必须大于0")
     if args.compare_cache and args.write_fingerprint_cache:
         raise SystemExit("--compare-cache 只用于新增站快速对比，不能同时覆盖写入缓存")
     if not is_custom_sites_path(args.sites):
@@ -656,7 +565,7 @@ def validate_duplicate_checker_args(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="按最近 M 期绝杀一合数据指纹检测重复网站。")
-    parser.add_argument("--period", type=int, default=124, help="当前期数，例如 124")
+    parser.add_argument("--period", type=int, required=True, help="当前期数，例如 251")
     parser.add_argument("--periods", type=int, default=10, help="优先抓取多少期，默认 10；不足时按实际抓到的期数检测")
     parser.add_argument("--success", default=None, help="重复拒收输出文件，默认 N期重复网站.txt")
     parser.add_argument("--review", default=None, help="疑似重复审核输出文件，默认 N期疑似重复网站.txt")
@@ -667,7 +576,7 @@ def main() -> None:
     parser.add_argument("--show-browser", action="store_true", help="显示二次点击站点的浏览器窗口")
     parser.add_argument("--sites", default=SITES_FILE, help="站点配置 JSON，默认 sites.json")
     parser.add_argument("--cache", default=CACHE_FILE, help="成功结果缓存 JSON，默认 he_success_cache.json")
-    parser.add_argument("--cache-max-age-hours", type=float, default=24.0, help="缓存最大有效小时数，默认 24；0 表示永不过期")
+    parser.add_argument("--cache-max-age-hours", type=float, default=24.0, help="比较缓存最大有效小时数，默认24；必须大于0")
     parser.add_argument("--mirror-limit", type=int, default=0, help=argparse.SUPPRESS)
     parser.add_argument("--no-browser-fallback", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--raw", default=None, help="可选：原始排序数据输出文件；默认不生成")
@@ -679,22 +588,25 @@ def main() -> None:
     validate_duplicate_checker_args(args)
 
     sys.stdout.reconfigure(encoding="utf-8")
-    warnings.simplefilter("ignore", InsecureRequestWarning)
-    requests.packages.urllib3.disable_warnings()
 
     sites_path = Path(args.sites).resolve()
-    cache_path = Path(args.cache).resolve()
     input_sites = load_sites(sites_path)
     compare_base_period = None
     new_site_indexes: list[int] = []
     if args.compare_cache:
         try:
             compare_base_period, cached_sites, fingerprints, _cached_errors = load_compare_cache(
-                Path(args.compare_cache).resolve(), args.period, args.periods
+                Path(args.compare_cache).resolve(), args.period, args.periods, args.cache_max_age_hours
             )
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
+        except (OSError, ValueError, FingerprintCacheError) as exc:
             raise SystemExit(f"--compare-cache 不可用: {exc}") from exc
+        validate_recent_cache_identity(
+            load_recent_cache(Path(args.compare_cache).resolve()), load_sites(Path(SITES_FILE).resolve())
+        )
         new_sites = input_sites
+        old_ids = {site.site_id for site in cached_sites}
+        if old_ids.intersection(site.site_id for site in new_sites):
+            raise SystemExit("新增站ID与正式缓存已有站点重复")
         sites = cached_sites + new_sites
         errors = {}
         old_count = len(cached_sites)
@@ -704,8 +616,6 @@ def main() -> None:
         print(f"[INFO] 读取旧站指纹缓存: {len(cached_sites)} 个，只抓新站: {len(new_sites)} 个")
     else:
         sites = input_sites
-        cached_urls = load_cached_url_by_site(cache_path, args.period, sites, args.cache_max_age_hours)
-        sites = apply_cached_urls(sites, cached_urls)
         host_locks = build_host_locks(sites, {})
         fingerprints = {}
         errors = {}
@@ -726,18 +636,29 @@ def main() -> None:
     )
     fingerprints.update(scraped_fingerprints)
     errors.update(scraped_errors)
+
     if compare_base_period is not None:
         reject_new_sites_without_baseline(
             fingerprints, errors, new_site_indexes, compare_base_period
         )
 
+    # A valid current row with insufficient history is not a failed scrape.
+    # Report incompleteness without deleting that verified row from the cache.
+    report_errors = dict(errors)
+    for index, values in scraped_fingerprints.items():
+        if index in fingerprints and len(values) < 3:
+            report_errors[index] = f"历史不足: 仅{len(values)}期，不能据此确认不重复"
     fail_lines = [
         format_duplicate_failure_result(args.period, sites[index], error)
-        for index, error in sorted(errors.items())
-        if index not in fingerprints
+        for index, error in sorted(report_errors.items())
+        if index not in fingerprints or error.startswith("历史不足:")
     ]
 
     pair_matches = find_pair_matches(sites, fingerprints)
+    if args.compare_cache:
+        new_set = set(new_site_indexes)
+        pair_matches = [pair for pair in pair_matches if
+                        pair.left_index in new_set or pair.right_index in new_set]
     reject_matches, review_matches = split_matches(pair_matches)
     success_file = args.success or f"{args.period}期重复网站.txt"
     review_file = args.review or f"{args.period}期疑似重复网站.txt"
@@ -748,13 +669,25 @@ def main() -> None:
     duplicate_lines = build_duplicate_output_with_values(reject_matches, sites, fingerprints, args.period, "重复组")
     review_lines = build_duplicate_output_with_values(review_matches, sites, fingerprints, args.period, "疑似组")
 
-    success_path.write_text("\n".join(duplicate_lines) + ("\n" if duplicate_lines else ""), encoding="utf-8-sig")
-    review_path.write_text("\n".join(review_lines) + ("\n" if review_lines else ""), encoding="utf-8-sig")
-    fail_path.write_text("\n".join(fail_lines) + ("\n" if fail_lines else ""), encoding="utf-8-sig")
+    changes = {
+        success_path: ("\n".join(duplicate_lines) + ("\n" if duplicate_lines else ""), "utf-8-sig"),
+        review_path: ("\n".join(review_lines) + ("\n" if review_lines else ""), "utf-8-sig"),
+        fail_path: ("\n".join(fail_lines) + ("\n" if fail_lines else ""), "utf-8-sig"),
+    }
+    output_paths = [success_path, review_path, fail_path]
     if args.raw:
         raw_path = Path(args.raw).resolve()
+        output_paths.append(raw_path)
         raw_lines = build_raw_output(sites, fingerprints, errors, args.period)
-        raw_path.write_text("\n".join(raw_lines) + ("\n" if raw_lines else ""), encoding="utf-8-sig")
+        changes[raw_path] = ("\n".join(raw_lines) + "\n", "utf-8-sig")
+    if len(set(output_paths)) != len(output_paths) or sites_path in output_paths:
+        raise SystemExit("判重输出路径必须互不相同，且不能覆盖站点配置")
+    cache_paths = {Path(args.fingerprint_cache).resolve()}
+    if args.compare_cache:
+        cache_paths.add(Path(args.compare_cache).resolve())
+    if set(output_paths) & cache_paths:
+        raise SystemExit("判重TXT输出禁止覆盖指纹缓存")
+    commit_text_transaction(changes)
     if args.write_fingerprint_cache:
         fingerprint_cache_path = Path(args.fingerprint_cache).resolve()
         write_fingerprint_cache(fingerprint_cache_path, sites, fingerprints, errors, args.period, args.periods)

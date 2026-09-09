@@ -1,9 +1,11 @@
 import time
 from pathlib import Path
-from queue import Full, Queue
+from queue import Empty, Full, Queue
 from threading import Lock
 
 from he_app.domain.models import Site, SourceDocument
+from he_app.domain.errors import SiteScrapeFailure
+from he_app.fetch.url_policy import same_origin_url, url_origin
 
 
 def advance_wait_state(
@@ -31,26 +33,21 @@ class BrowserClient:
         if self.driver is not None:
             return
         from selenium import webdriver
-        from selenium.webdriver.chrome.options import Options
-        from selenium.webdriver.chrome.service import Service
+        from selenium.webdriver.chrome.options import Options as ChromeOptions
+        from selenium.webdriver.edge.options import Options as EdgeOptions
 
-        options = Options()
+        binary = self.find_browser_binary()
+        is_edge = bool(binary and Path(binary).name.lower().startswith("msedge"))
+        options = EdgeOptions() if is_edge else ChromeOptions()
         options.page_load_strategy = "eager"
         if self.headless:
             options.add_argument("--headless=new")
-        options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--ignore-certificate-errors")
         options.add_argument("--window-size=1600,2400")
-        chrome_binary = self.find_browser_binary()
-        if chrome_binary:
-            options.binary_location = chrome_binary
-        try:
-            from webdriver_manager.chrome import ChromeDriverManager
-
-            self.driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-        except Exception:
-            self.driver = webdriver.Chrome(options=options)
+        if binary:
+            options.binary_location = binary
+        factory = webdriver.Edge if is_edge else webdriver.Chrome
+        self.driver = factory(options=options)
 
     @staticmethod
     def find_browser_binary() -> str | None:
@@ -89,13 +86,13 @@ class BrowserClient:
         return len(body_text.strip()), len(page_source)
 
     def wait_for_document(self, max_wait: float, previous_state: tuple[int, int] | None = None) -> None:
-        deadline = time.time() + max(0.0, max_wait)
+        deadline = time.monotonic() + max(0.0, max_wait)
         last_state = None
         stable_count = 0
         while True:
             state = self.get_document_state()
             stable_count, ready = advance_wait_state(state, previous_state, last_state, stable_count)
-            if ready or time.time() >= deadline:
+            if ready or time.monotonic() >= deadline:
                 return
             last_state = state
             time.sleep(0.25)
@@ -103,26 +100,26 @@ class BrowserClient:
     def get_documents(self, url: str, period: int, click_first: bool, timeout: int) -> list[str]:
         if self.driver is None:
             raise RuntimeError("Browser is not started")
+        url_origin(url)
         self.driver.set_page_load_timeout(timeout)
-        try:
-            self.driver.get(url)
-        except Exception as exc:
-            if "timeout" not in str(exc).lower():
-                raise
+        self.driver.get(url)
+        same_origin_url(url, self.driver.current_url)
         self.wait_for_document(min(float(timeout), 5.0))
         self.capture_sequence = 0
-        documents = self.collect_documents(url)
         if click_first:
-            previous_state = self.get_document_state()
+            previous = self.get_document_state()
             if self.try_click_labels():
-                self.wait_for_document(min(float(timeout), 2.0), previous_state)
-                documents.extend(self.collect_documents(url))
-            for _ in range(2):
-                previous_state = self.get_document_state()
-                if self.try_click_best_post(period):
-                    self.wait_for_document(min(float(timeout), 3.0), previous_state)
-                    documents.extend(self.collect_documents(url))
-        return documents
+                same_origin_url(url, self.driver.current_url)
+                self.wait_for_document(min(float(timeout), 2.0), previous)
+            previous = self.get_document_state()
+            if not self.try_click_best_post(period):
+                raise SiteScrapeFailure("主页找帖失败", "没有唯一的同源指定期严格文章链接")
+            same_origin_url(url, self.driver.current_url)
+            self.wait_for_document(min(float(timeout), 3.0), previous)
+        # Navigation snapshots and list summaries are diagnostics, not alternate
+        # authorities that may rescue a failed final detail page.
+        documents = self.collect_documents(url)
+        return [documents[-1]] if documents else []
 
     def collect_documents(self, url: str = "") -> list[str]:
         if self.driver is None:
@@ -131,6 +128,10 @@ class BrowserClient:
             body_text = self.driver.find_element("tag name", "body").text
         except Exception:
             body_text = ""
+        original_url = url
+        url = self.driver.current_url
+        if original_url:
+            same_origin_url(original_url, url)
         state_id = f"browser:{url}:state:{self.capture_sequence}"
         self.capture_sequence += 1
         return [
@@ -139,8 +140,8 @@ class BrowserClient:
                 source_url=url,
                 fetch_kind="browser",
                 document_type="body-text",
-                parent_url=url,
-                authority_id=f"{state_id}:body",
+                parent_url=original_url,
+                authority_id=state_id,
                 document_id=f"{state_id}:body",
             ),
             SourceDocument(
@@ -148,8 +149,8 @@ class BrowserClient:
                 source_url=url,
                 fetch_kind="browser",
                 document_type="page-source",
-                parent_url=url,
-                authority_id=f"{state_id}:page-source",
+                parent_url=original_url,
+                authority_id=state_id,
                 document_id=f"{state_id}:page-source",
             ),
         ]
@@ -178,32 +179,28 @@ class BrowserClient:
     def try_click_best_post(self, period: int) -> bool:
         if self.driver is None:
             return False
+        # Only actual navigable links; never score/click arbitrary parent DIVs.
         script = r"""
-        const period = String(arguments[0]);
-        const keywordRe = /绝\s*杀\s*一\s*合|杀.{0,80}\d{1,2}\s*合/;
-        let best = null;
-        for (const el of document.querySelectorAll("a,article,li,section,div")) {
-            const text = (el.innerText || "").replace(/\s+/g, " ").trim();
-            if (!text || text.length < 6 || text.length > 900) continue;
+        const periodRe = new RegExp("(?:^|[^0-9])" + String(arguments[0]) + "\\s*期");
+        const keywordRe = /绝\s*杀\s*一\s*合|公式\s*杀\s*合|绝\s*杀\s*合/;
+        const links = new Map();
+        for (const el of document.querySelectorAll("a[href]")) {
+            const text = (el.innerText || "").trim();
             const rect = el.getBoundingClientRect();
-            if (rect.width < 30 || rect.height < 12) continue;
-            let score = 0;
-            if (text.includes(period + "期")) score += 60;
-            if (keywordRe.test(text)) score += 80;
-            if (/\d{1,2}\s*合/.test(text)) score += 20;
-            if (/论坛|主页|首页|返回|登录|注册/.test(text)) score -= 30;
-            if (score < 80) continue;
-            const item = { el, score, top: rect.top };
-            if (!best || item.score > best.score || (item.score === best.score && item.top < best.top)) best = item;
+            if (!periodRe.test(text) || !keywordRe.test(text) || rect.width < 1 || rect.height < 1) continue;
+            const href = new URL(el.getAttribute("href"), location.href);
+            if (!/^https?:$/.test(href.protocol) || href.origin !== location.origin || href.href === location.href) continue;
+            links.set(href.href, el);
         }
-        if (!best) return false;
-        best.el.click();
-        return true;
+        if (links.size > 1) return "conflict";
+        if (links.size !== 1) return "missing";
+        links.values().next().value.click();
+        return "clicked";
         """
-        try:
-            return bool(self.driver.execute_script(script, period))
-        except Exception:
-            return False
+        status = self.driver.execute_script(script, period)
+        if status == "conflict":
+            raise SiteScrapeFailure("候选冲突", "浏览器命中多个不同目标文章链接")
+        return status == "clicked"
 
 
 def close_browser_safely(browser: BrowserClient) -> None:
@@ -251,7 +248,9 @@ class BrowserPool:
                     client = self._create_client()
                     created.append(client)
                     self.available.put(client)
-            except Exception:
+            except Exception as exc:
+                self.failure = exc
+                self.started = True
                 with self.clients_lock:
                     for client in created:
                         self.clients.discard(client)
@@ -288,7 +287,10 @@ class BrowserPool:
             failure = self.failure
         if failure is not None:
             raise failure
-        client = self.available.get()
+        try:
+            client = self.available.get(timeout=60.0)
+        except Empty as exc:
+            raise TimeoutError("浏览器池等待超过60秒") from exc
         if client is self.failure_token:
             self.available.put(self.failure_token)
             with self.clients_lock:
@@ -335,7 +337,8 @@ class BrowserPool:
 
 
 def default_browser_pool_size(sites: list[Site], workers: int) -> int:
-    browser_site_count = sum(1 for site in sites if site.browser)
+    from he_app.services.document_sources import requires_browser
+    browser_site_count = sum(1 for site in sites if requires_browser(site))
     if browser_site_count == 0:
         return 0
     return min(3, max(1, workers), browser_site_count)
