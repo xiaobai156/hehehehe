@@ -1,0 +1,58 @@
+name: Debug 252 s131 canonical
+
+on:
+  push:
+    branches:
+      - debug/252-s131-canonical-20260909
+    paths:
+      - .github/workflows/debug-252-s131-canonical.yml
+
+permissions:
+  contents: read
+
+jobs:
+  debug:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      PYTHONUTF8: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      HE_NETWORK_POLICY: "strict"
+      HE_MAX_RESPONSE_BYTES: "8388608"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: python -m pip install -e ".[browser,test]"
+      - name: Validate canonical target
+        shell: pwsh
+        run: |
+          python he_live_validator.py `
+            --cycle 2026 `
+            --period 252 `
+            --periods 10 `
+            --workers 1 `
+            --browser-workers 1 `
+            --timeout 20 `
+            --hard-timeout 90 `
+            --browser-hard-timeout 130 `
+            --sites debug_252_s131_canonical.json `
+            --output-dir debug-s131-canonical
+      - name: Print result
+        shell: pwsh
+        run: |
+          $report = Get-Content debug-s131-canonical/live-validation.json -Raw -Encoding UTF8 | ConvertFrom-Json
+          foreach ($item in $report.results) {
+            Write-Host "$($item.site_id) current=$($item.current_ok) value=$($item.current_value) history=$($item.history_count) category=$($item.error_category) error=$($item.error)"
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: debug-252-s131-canonical
+          path: debug-s131-canonical
+          if-no-files-found: warn
+          retention-days: 3
