@@ -1,5 +1,4 @@
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import datetime, timezone
 
 import pytest
 
@@ -53,7 +52,7 @@ def test_period_tokens_are_explicit_and_validated():
 
 
 def test_current_tokyo_period_uses_tokyo_date():
-    instant = datetime(2026, 12, 31, 15, 30, tzinfo=ZoneInfo("UTC"))
+    instant = datetime(2026, 12, 31, 15, 30, tzinfo=timezone.utc)
     assert current_tokyo_period(instant) == PeriodKey(2027, 1)
 
 
