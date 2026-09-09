@@ -31,6 +31,34 @@ def test_verified_locator_only_sites_disable_only_body_locator_requirement() -> 
         assert rule.allowed_fetch_kinds == ()
 
 
+def test_s131_uses_only_the_live_verified_exact_canonical_url() -> None:
+    site = Site(
+        "开奖发财",
+        adaptive_fetch.KAIJIANGFACAI_CONFIG_URL,
+        "top",
+        False,
+        False,
+        "s131_kjfc_234432",
+    )
+    request_site = adaptive_fetch._verified_http_site(site)
+    assert request_site.url == adaptive_fetch.KAIJIANGFACAI_CANONICAL_URL
+    assert request_site.site_id == site.site_id
+    assert request_site.pick == site.pick
+
+
+def test_s131_rejects_reusing_canonical_source_after_config_identity_changes() -> None:
+    changed = Site(
+        "开奖发财",
+        "https://156.225.88.144:12098/#different-record",
+        "top",
+        False,
+        False,
+        "s131_kjfc_234432",
+    )
+    with pytest.raises(SiteScrapeFailure, match="配置入口已变化"):
+        adaptive_fetch._verified_http_site(changed)
+
+
 def test_forum_url_user_id_is_stronger_than_mutable_nickname(monkeypatch) -> None:
     site = _site(
         "s020_fklgrq",
