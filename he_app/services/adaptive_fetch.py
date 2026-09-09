@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import replace
 from urllib.parse import urlparse
 
@@ -12,7 +13,7 @@ from he_app.domain.models import Site, SiteRule, SourceDocument
 from he_app.domain.policies import normalize_text
 from he_app.fetch.discovery import collect_documents
 from he_app.fetch.http import fetch_text, fetch_text_with_curl
-from he_app.fetch.url_policy import StrictNetworkPolicy
+from he_app.fetch.url_policy import ResolvedOrigin, StrictNetworkPolicy
 from he_app.parsers.common import has_kill_sum_keyword
 from he_app.parsers.dedicated.kaijiangfacai import KAIJIANGFACAI_SITE_ID
 from he_app.parsers.dedicated.tables import site_rule
@@ -76,10 +77,48 @@ def _verified_http_site(site: Site) -> Site:
 
 
 def _curl_tls_fallback(site: Site, timeout: int) -> list[str]:
-    """Retry transport with curl while preserving DNS pinning and TLS checks."""
+    """Retry curl across verified DNS addresses without weakening TLS.
 
-    resolved = StrictNetworkPolicy(require_peer=False).resolve(site.url)
-    text = fetch_text_with_curl(site.url, float(timeout), resolved)
+    Some legacy hosts expose different certificates on different public DNS
+    backends.  Each address is tried through curl ``--resolve`` so the original
+    hostname/SNI and normal certificate validation remain intact.  Only curl
+    transport/TLS failures may advance to another prevalidated address; a real
+    HTTP response, parser error or content error is never hidden by node
+    hopping.
+    """
+
+    policy = StrictNetworkPolicy(require_peer=False)
+    resolved = policy.resolve(site.url)
+    deadline = time.monotonic() + float(timeout)
+    last_transport_error: RuntimeError | None = None
+    successful_resolved: ResolvedOrigin | None = None
+    text = None
+
+    for address in resolved.addresses:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("curl多地址请求预算已耗尽")
+        pinned = ResolvedOrigin(
+            resolved.scheme,
+            resolved.host,
+            resolved.port,
+            (address,),
+        )
+        try:
+            text = fetch_text_with_curl(site.url, remaining, pinned)
+        except RuntimeError as exc:
+            if not str(exc).startswith("curl exit "):
+                raise
+            last_transport_error = exc
+            continue
+        successful_resolved = pinned
+        break
+
+    if text is None or successful_resolved is None:
+        if last_transport_error is not None:
+            raise last_transport_error
+        raise RuntimeError("curl未取得可验证的公网地址响应")
+
     final_url = str(getattr(text, "final_url", site.url) or site.url)
     authority = f"http-curl:{final_url}:page"
     return [
@@ -91,7 +130,7 @@ def _curl_tls_fallback(site: Site, timeout: int) -> list[str]:
             parent_url=site.url,
             authority_id=authority,
             document_id=f"{authority}:html",
-            resolved_addresses=tuple(resolved.addresses),
+            resolved_addresses=tuple(successful_resolved.addresses),
         )
     ]
 
