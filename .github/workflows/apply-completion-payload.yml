@@ -1,0 +1,69 @@
+name: Apply production-completion payload
+
+on:
+  push:
+    branches:
+      - fix/production-completion-20260909
+    paths:
+      - .completion_payload/manifest.json
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Verify and extract payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import base64, hashlib, json, tarfile
+          from pathlib import Path
+
+          root = Path('.completion_payload')
+          manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
+          archive = base64.b64decode((root / manifest['payload']).read_text(encoding='ascii'), validate=True)
+          actual = hashlib.sha256(archive).hexdigest()
+          if actual != manifest['sha256']:
+              raise SystemExit(f"payload hash mismatch: {actual}")
+          target = Path('/tmp/production-completion.tar.gz')
+          target.write_bytes(archive)
+          with tarfile.open(target, 'r:gz') as tar:
+              for member in tar.getmembers():
+                  destination = (Path.cwd() / member.name).resolve()
+                  if Path.cwd().resolve() not in destination.parents and destination != Path.cwd().resolve():
+                      raise SystemExit(f"unsafe payload path: {member.name}")
+              tar.extractall('.')
+          PY
+          rm -rf .completion_payload
+      - name: Install and verify
+        run: |
+          python -m pip install -e '.[browser,test]'
+          python -m compileall -q he_app he_crawler.py he_duplicate_checker.py he_multi_period_crawler.py he_live_audit.py
+          python -c "import he_crawler, he_duplicate_checker, he_multi_period_crawler, he_live_audit"
+          ruff check he_app he_crawler.py he_duplicate_checker.py he_multi_period_crawler.py he_live_audit.py tests
+          python -m pytest -q -m 'not browser'
+      - name: Protect production data and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --name-only | grep -E '^(sites\.json|outputs/recent_10_cache\.json)$'; then
+            echo 'Payload attempted to modify production data' >&2
+            exit 1
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'feat: complete cycle-aware live validation and hard isolation'
+          git push origin HEAD:fix/production-completion-20260909
