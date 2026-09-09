@@ -20,6 +20,7 @@ from typing import Any, Callable, Iterable
 from he_app.domain.models import Site
 from he_app.fetch.browser import BrowserClient, close_browser_safely
 from he_app.fetch.http import host_key
+from he_app.services.browser_policy import runtime_requires_browser
 
 
 SiteJob = tuple[int, Site]
@@ -195,13 +196,19 @@ def _stop_slot(slot: dict[str, Any], graceful: bool = False) -> None:
     _close_queue(task_queue)
 
 
+def _runtime_needs_browser(site: Site, needs_browser: NeedsBrowser) -> bool:
+    return runtime_requires_browser(site, needs_browser)
+
+
 def _lane_counts(
     jobs: list[SiteJob],
     workers: int,
     needs_browser: NeedsBrowser,
     browser_limit: int,
 ) -> tuple[int, int]:
-    browser_count = sum(1 for _index, site in jobs if needs_browser(site))
+    browser_count = sum(
+        1 for _index, site in jobs if _runtime_needs_browser(site, needs_browser)
+    )
     http_count = len(jobs) - browser_count
     browser_slots = min(max(0, browser_limit), browser_count, workers)
     if browser_count and http_count and workers > 1:
@@ -266,8 +273,16 @@ def run_isolated_site_jobs(
         shared_locks.setdefault(host_key(site.url), manager.Lock())
 
     result_queue = context.Queue()
-    http_jobs = [(index, site) for index, site in pending if not needs_browser(site)]
-    browser_jobs = [(index, site) for index, site in pending if needs_browser(site)]
+    http_jobs = [
+        (index, site)
+        for index, site in pending
+        if not _runtime_needs_browser(site, needs_browser)
+    ]
+    browser_jobs = [
+        (index, site)
+        for index, site in pending
+        if _runtime_needs_browser(site, needs_browser)
+    ]
     if workers == 1 and http_jobs and browser_jobs:
         # One browser-capable slot can also execute HTTP-only jobs; handlers
         # decide from the site policy whether the provided browser is used.
