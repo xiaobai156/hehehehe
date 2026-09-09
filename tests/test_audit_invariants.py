@@ -774,6 +774,8 @@ def test_runner_cache_conflict_does_not_change_live_success(
         fingerprint_cache=str(cache_path),
         no_fingerprint_cache_sync=False,
         preserve_unconfigured_cache_sites=False,
+        no_isolation=True,
+        cycle_year=2026,
     )
     assert runner.run(args) == 0
     success_text = success_path.read_text(encoding="utf-8-sig")
@@ -781,7 +783,7 @@ def test_runner_cache_conflict_does_not_change_live_success(
     assert "所有目录耗时统计" not in success_text
     assert not fail_path.exists()
     payload = json.loads(cache_path.read_text(encoding="utf-8"))
-    assert payload["sites"][0]["fingerprint"]["211"] == "04合"
+    assert payload["sites"][0]["fingerprint"]["2026-211"] == "04合"
 
 
 def test_runner_preserves_live_txt_when_cache_update_fails(
@@ -823,6 +825,8 @@ def test_runner_preserves_live_txt_when_cache_update_fails(
         fingerprint_cache=str(cache_path),
         no_fingerprint_cache_sync=False,
         preserve_unconfigured_cache_sites=False,
+        no_isolation=True,
+        cycle_year=2026,
     )
 
     assert runner.run(args) == 1

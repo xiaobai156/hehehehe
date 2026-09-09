@@ -1,3 +1,4 @@
+import json
 import time
 from pathlib import Path
 from queue import Empty, Full, Queue
@@ -5,7 +6,7 @@ from threading import Lock
 
 from he_app.domain.models import Site, SourceDocument
 from he_app.domain.errors import SiteScrapeFailure
-from he_app.fetch.url_policy import same_origin_url, url_origin
+from he_app.fetch.url_policy import StrictNetworkPolicy, same_origin_url, url_origin
 
 
 def advance_wait_state(
@@ -24,10 +25,13 @@ def advance_wait_state(
 
 
 class BrowserClient:
-    def __init__(self, headless: bool = True):
+    def __init__(self, headless: bool = True, network_policy=None):
         self.headless = headless
         self.driver = None
         self.capture_sequence = 0
+        self.network_policy = network_policy if network_policy is not None else StrictNetworkPolicy(require_peer=True)
+        self.last_peer_ip = ""
+        self.last_resolved_addresses: tuple[str, ...] = ()
 
     def start(self) -> None:
         if self.driver is not None:
@@ -44,6 +48,10 @@ class BrowserClient:
             options.add_argument("--headless=new")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--window-size=1600,2400")
+        options.add_argument("--no-proxy-server")
+        options.add_argument("--proxy-bypass-list=*")
+        options.add_argument("--disable-quic")
+        options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
         if binary:
             options.binary_location = binary
         factory = webdriver.Edge if is_edge else webdriver.Chrome
@@ -97,10 +105,69 @@ class BrowserClient:
             last_state = state
             time.sleep(0.25)
 
+
+    def _clear_performance_log(self) -> None:
+        if self.driver is None or not hasattr(self.driver, "get_log"):
+            return
+        try:
+            self.driver.get_log("performance")
+        except Exception:
+            pass
+
+    def _document_remote_ips(self, expected_url: str) -> list[str]:
+        if self.driver is None or not hasattr(self.driver, "get_log"):
+            return []
+        expected_origin = url_origin(expected_url)
+        addresses: list[str] = []
+        try:
+            entries = self.driver.get_log("performance")
+        except Exception:
+            return []
+        for entry in entries:
+            try:
+                message = json.loads(entry.get("message", "{}"))["message"]
+                if message.get("method") != "Network.responseReceived":
+                    continue
+                params = message.get("params", {})
+                response = params.get("response", {})
+                if params.get("type") != "Document":
+                    continue
+                response_url = str(response.get("url", ""))
+                if url_origin(response_url) != expected_origin:
+                    continue
+                address = str(response.get("remoteIPAddress", "")).strip()
+                if address and address not in addresses:
+                    addresses.append(address)
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError, SiteScrapeFailure):
+                continue
+        return addresses
+
+    def _verify_navigation_network(self, requested_url: str, resolved) -> None:
+        if self.driver is None:
+            raise RuntimeError("Browser is not started")
+        final_url = self.driver.current_url
+        same_origin_url(requested_url, final_url)
+        final_resolved = resolved
+        addresses = self._document_remote_ips(final_url)
+        if self.network_policy is not None and not addresses:
+            raise SiteScrapeFailure("站点身份错误", f"浏览器无法验证实际连接公网地址: {final_url}")
+        verified = [
+            self.network_policy.verify_address(
+                address,
+                context=f"浏览器连接 {final_resolved.host}",
+                resolved=final_resolved,
+            )
+            for address in addresses
+        ] if self.network_policy is not None else addresses
+        self.last_peer_ip = verified[-1] if verified else ""
+        self.last_resolved_addresses = tuple(final_resolved.addresses) if final_resolved is not None else ()
+
     def get_documents(self, url: str, period: int, click_first: bool, timeout: int) -> list[str]:
         if self.driver is None:
             raise RuntimeError("Browser is not started")
         url_origin(url)
+        resolved = self.network_policy.resolve(url) if self.network_policy is not None else None
+        self._clear_performance_log()
         self.driver.set_page_load_timeout(timeout)
         self.driver.get(url)
         same_origin_url(url, self.driver.current_url)
@@ -116,6 +183,7 @@ class BrowserClient:
                 raise SiteScrapeFailure("主页找帖失败", "没有唯一的同源指定期严格文章链接")
             same_origin_url(url, self.driver.current_url)
             self.wait_for_document(min(float(timeout), 3.0), previous)
+        self._verify_navigation_network(url, resolved)
         # Navigation snapshots and list summaries are diagnostics, not alternate
         # authorities that may rescue a failed final detail page.
         documents = self.collect_documents(url)
@@ -143,6 +211,8 @@ class BrowserClient:
                 parent_url=original_url,
                 authority_id=state_id,
                 document_id=f"{state_id}:body",
+                peer_ip=self.last_peer_ip,
+                resolved_addresses=self.last_resolved_addresses,
             ),
             SourceDocument(
                 self.driver.page_source,
@@ -152,6 +222,8 @@ class BrowserClient:
                 parent_url=original_url,
                 authority_id=state_id,
                 document_id=f"{state_id}:page-source",
+                peer_ip=self.last_peer_ip,
+                resolved_addresses=self.last_resolved_addresses,
             ),
         ]
 

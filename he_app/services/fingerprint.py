@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 
 from he_app.domain.errors import SiteScrapeFailure
 from he_app.domain.models import Candidate, Site
+from he_app.domain.periods import PeriodKey, issue_map_for_window
 from he_app.parsers.common import build_latest_candidate_parts, extract_values, period_numbers_in_text
 from he_app.parsers.dedicated import history, structured, tables, kaijiangfacai, ttss
 from he_app.parsers.registry import REGISTRY
@@ -17,6 +18,7 @@ from he_app.validation.direction import directional_window
 from he_app.validation.period import is_valid_sum_value
 
 Fingerprint = dict[int, str]
+CycleFingerprint = dict[PeriodKey, str]
 
 
 def _edge_block(blocks, pick):
@@ -80,54 +82,106 @@ def _history_rows(site: Site, document: str, period: int) -> list[Candidate]:
         if rule.require_body_locator:
             parts = [part for part in parts if part[1]]
         return _parts_to_candidates(parts, rule.allow_weak_kill_sum_keyword)
-    return []
+
+    # A dedicated current parser does not automatically imply a dedicated
+    # history extractor.  When the fetched authority contains exactly one
+    # article/body, reuse the strict dedicated row recognizer.  The baseline
+    # has already been proven by that site's dedicated parser, so this only
+    # exposes older rows from the same record; it never scans another article
+    # or relaxes the current top/bottom boundary.
+    soup = BeautifulSoup(document, "html.parser")
+    if len(soup.select(".topic-content, article")) > 1:
+        return []
+    parts = history.build_dedicated_window_parts(
+        [document], rule.allow_weak_kill_sum_keyword
+    )
+    return _parts_to_candidates(parts, rule.allow_weak_kill_sum_keyword)
 
 
-def build_site_fingerprint(site: Site, documents: list[str], period: int, periods: int) -> Fingerprint:
-    if periods < 1 or period < 1:
-        raise ValueError("期数和历史窗口必须为正数")
+def build_site_period_fingerprint(
+    site: Site,
+    documents: list[str],
+    base: PeriodKey,
+    periods: int,
+) -> CycleFingerprint:
+    if periods < 1:
+        raise ValueError("历史窗口必须为正数")
     documents = _allowed_documents(site, documents)
-    # This enforces the exact requested baseline and same-snapshot veto before
-    # any interior history is considered. No borrowing an adjacent baseline.
-    baseline = parse_site_period(site, period, documents)
+    issue_map = issue_map_for_window(base, periods)
+
+    # Enforce the exact requested current edge before considering history.
+    baseline = parse_site_period(site, base.issue, documents)
     if not baseline.success:
         return {}
-    snapshots: list[Fingerprint] = []
+
+    snapshots: list[CycleFingerprint] = []
     for document in documents:
-        edge = parse_site_period(site, period, [document])
+        edge = parse_site_period(site, base.issue, [document])
         if not edge.success or not edge.evidence:
             continue
-        fingerprint = {period: ",".join(edge.evidence[0].values)}
-        values_by_issue = {}
-        ambiguous = set()
-        for candidate in _history_rows(site, document, period):
+        fingerprint: CycleFingerprint = {
+            base: ",".join(edge.evidence[0].values)
+        }
+        values_by_key: dict[PeriodKey, str] = {}
+        ambiguous: set[PeriodKey] = set()
+        for candidate in _history_rows(site, document, base.issue):
             issues = period_numbers_in_text(candidate.line)
             if not issues or any(issue != issues[0] for issue in issues):
                 continue
-            issue = issues[0]
-            if not max(1, period - periods + 1) <= issue <= period:
+            key = issue_map.get(issues[0])
+            if key is None:
                 continue
             values = candidate.values.split(",")
-            if (len(values) != site.value_count or len(set(values)) != len(values)
-                    or not all(is_valid_sum_value(value) for value in values)):
+            if (
+                len(values) != site.value_count
+                or len(set(values)) != len(values)
+                or not all(is_valid_sum_value(value) for value in values)
+            ):
                 continue
-            previous = values_by_issue.get(issue)
+            previous = values_by_key.get(key)
             if previous is not None and previous != candidate.values:
-                ambiguous.add(issue)
+                ambiguous.add(key)
                 continue
-            evidence = build_document_evidence(site, issue, values, candidate.line, [document])
+            evidence = build_document_evidence(
+                site, key.issue, values, candidate.line, [document]
+            )
             if evidence:
-                values_by_issue[issue] = candidate.values
-        # The selected current edge remains authoritative; conflicting interior
-        # duplicates cannot change it. Ambiguous historical issues are omitted.
-        for issue, value in values_by_issue.items():
-            if issue != period and issue not in ambiguous:
-                fingerprint[issue] = value
+                values_by_key[key] = candidate.values
+        for key, value in values_by_key.items():
+            if key != base and key not in ambiguous:
+                fingerprint[key] = value
         snapshots.append(dict(sorted(fingerprint.items(), reverse=True)))
+
     for index, left in enumerate(snapshots):
         for right in snapshots[index + 1:]:
-            for issue in left.keys() & right.keys():
-                if left[issue] != right[issue]:
-                    raise SiteScrapeFailure("候选冲突", f"{site.name} {issue}期不同来源历史指纹冲突")
-    # Select one whole snapshot, never assemble missing issues across documents.
+            for key in left.keys() & right.keys():
+                if left[key] != right[key]:
+                    raise SiteScrapeFailure(
+                        "候选冲突",
+                        f"{site.name} {key.cache_key}期不同来源历史指纹冲突",
+                    )
     return max(snapshots, key=len) if snapshots else {}
+
+
+def build_site_fingerprint(
+    site: Site,
+    documents: list[str],
+    period: int,
+    periods: int,
+    cycle_year: int | None = None,
+):
+    """Build a fingerprint; cycle-aware callers receive ``PeriodKey`` keys.
+
+    Omitting ``cycle_year`` preserves the historical integer-key public API.
+    Production entry points always pass a year and therefore retain identity
+    across 365/366 -> 001 rollovers.
+    """
+
+    if period < 1:
+        raise ValueError("期数必须为正数")
+    compatibility_year = cycle_year or 2000
+    base = PeriodKey(compatibility_year, period)
+    fingerprint = build_site_period_fingerprint(site, documents, base, periods)
+    if cycle_year is not None:
+        return fingerprint
+    return {key.issue: value for key, value in fingerprint.items()}

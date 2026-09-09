@@ -37,6 +37,8 @@ def _args(tmp_path: Path, cache_path: Path, success_path: Path, fail_path: Path)
         fingerprint_cache=str(cache_path),
         no_fingerprint_cache_sync=False,
         preserve_unconfigured_cache_sites=False,
+        no_isolation=True,
+        cycle_year=2026,
     )
 
 
@@ -97,8 +99,13 @@ def test_runner_skips_success_fingerprint_update_but_marks_failures_at_or_below_
 
     payload = json.loads(cache_path.read_text(encoding="utf-8"))
     assert payload["base_period"] == 211
-    assert payload["sites"][0]["fingerprint"] == {"210": "02合", "211": "03合"}
-    assert payload["sites"][1]["fingerprint"] == {"210": "02合"}
+    assert payload["schema_version"] == 2
+    assert payload["base_period_key"] == "2026-211"
+    assert payload["sites"][0]["fingerprint"] == {
+        "2026-211": "03合",
+        "2026-210": "02合",
+    }
+    assert payload["sites"][1]["fingerprint"] == {"2026-210": "02合"}
     assert payload["errors"] == [
         {
             "id": "threshold-2",
@@ -106,6 +113,7 @@ def test_runner_skips_success_fingerprint_update_but_marks_failures_at_or_below_
             "url": "https://example.test/2",
             "period": 211,
             "status": "失败",
+            "period_key": "2026-211",
             "error": "211期抓取失败",
             "updated_at": payload["errors"][0]["updated_at"],
         }
@@ -134,7 +142,10 @@ def test_runner_updates_cache_and_marks_failed_sites_above_threshold(tmp_path: P
     assert payload["base_period"] == 211
     assert len(payload["sites"]) == 7
     assert payload["sites"][0]["fingerprint"] == {}
-    assert all(item["fingerprint"] == {"211": f"{index:02d}合"} for index, item in enumerate(payload["sites"][1:], 1))
+    assert all(
+        item["fingerprint"] == {"2026-211": f"{index:02d}合"}
+        for index, item in enumerate(payload["sites"][1:], 1)
+    )
     assert payload["errors"][0]["id"] == "threshold-1"
     assert payload["errors"][0]["status"] == "失败"
     assert payload["errors"][0]["period"] == 211
