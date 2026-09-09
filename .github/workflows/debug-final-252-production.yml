@@ -1,0 +1,58 @@
+name: Debug final 252 production
+
+on:
+  push:
+    branches:
+      - debug/final-252-production-parallel-20260909
+    paths:
+      - .github/workflows/debug-final-252-production.yml
+
+permissions:
+  contents: read
+
+jobs:
+  production:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      PYTHONUTF8: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      HE_NETWORK_POLICY: "strict"
+      HE_MAX_RESPONSE_BYTES: "8388608"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: python -m pip install -e ".[browser,test]"
+      - name: Run production entry
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force production-check | Out-Null
+          python he_crawler.py `
+            --period 252 `
+            --workers 8 `
+            --timeout 20 `
+            --hard-timeout 90 `
+            --browser-hard-timeout 130 `
+            --success production-check/252-success.txt `
+            --fail production-check/252-fail.txt `
+            --no-fingerprint-cache-sync
+      - name: Count results
+        shell: pwsh
+        run: |
+          $successCount = 0
+          if (Test-Path production-check/252-success.txt) {
+            $successCount = @(Get-Content production-check/252-success.txt -Encoding UTF8 | Where-Object { $_ -match '^(?:0[1-9]|1[0-3])合(?:,(?:0[1-9]|1[0-3])合)*\s+' }).Count
+          }
+          Write-Host "production_success=$successCount production_failed=$((125 - $successCount))"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: debug-final-252-production
+          path: production-check
+          if-no-files-found: warn
+          retention-days: 7
