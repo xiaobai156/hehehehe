@@ -1,6 +1,6 @@
 name: Validate 252 repair branch
 
-# rerun after browser-pool and peer-verification repairs
+# latest rerun: verified locator repairs, manual curl redirects, browser hard deadline 130s
 on:
   push:
     branches:
@@ -40,6 +40,7 @@ jobs:
             --browser-workers 3 `
             --timeout 20 `
             --hard-timeout 90 `
+            --browser-hard-timeout 130 `
             --output-dir live-validation
       - name: Print comparison summary
         shell: pwsh
@@ -48,7 +49,8 @@ jobs:
           $failed = $report.site_count - $report.current_success_count
           Write-Host "baseline_success=17 baseline_failed=108"
           Write-Host "first_repair_success=23 first_repair_failed=102"
-          Write-Host "repaired_success=$($report.current_success_count) repaired_failed=$failed"
+          Write-Host "second_repair_success=68 second_repair_failed=57"
+          Write-Host "latest_success=$($report.current_success_count) latest_failed=$failed"
           Write-Host "history_complete=$($report.history_complete_count) hard_timeouts=$($report.hard_timeout_count)"
       - name: Upload report
         if: always()
