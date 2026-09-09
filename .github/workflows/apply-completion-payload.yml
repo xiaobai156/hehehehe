@@ -39,6 +39,7 @@ jobs:
               raise SystemExit(f"payload hash mismatch: {actual}")
           Path('/tmp/production-completion.patch').write_bytes(gzip.decompress(archive))
           PY
+          rm -f .github/workflows/baseline-live.yml
           git apply --check /tmp/production-completion.patch
           git apply /tmp/production-completion.patch
           rm -rf .completion_payload
