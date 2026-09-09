@@ -1,3 +1,0 @@
-    1: from .atomic_write import exclusive_path_lock, write_text_atomic
-       
-    1: __all__ = ["exclusive_path_lock", "write_text_atomic"]

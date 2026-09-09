@@ -13,8 +13,6 @@ class SourceDocument(str):
         record_id: str | None = None,
         authority_id: str = "legacy",
         document_id: str = "",
-        peer_ip: str = "",
-        resolved_addresses: tuple[str, ...] = (),
     ):
         instance = super().__new__(cls, text)
         instance.source_url = source_url
@@ -24,8 +22,6 @@ class SourceDocument(str):
         instance.record_id = record_id
         instance.authority_id = authority_id or "legacy"
         instance.document_id = document_id or instance.authority_id
-        instance.peer_ip = peer_ip
-        instance.resolved_addresses = tuple(resolved_addresses)
         return instance
 
 
@@ -37,12 +33,11 @@ class Site:
     browser: bool = False
     click_first: bool = False
     site_id: str = ""
+    # Ordinary sites use one sum.  A small number of explicitly configured
+    # sites may require two sums, while keeping the same parser contract.
     value_count: int = 1
-
-    def __post_init__(self) -> None:
-        # Preserve six-argument callers of the sole registered two-value site.
-        if self.site_id == "s085_kcvpleh" and self.value_count == 1:
-            object.__setattr__(self, "value_count", 2)
+    # Explicit, audited top-direction admission exception for one period.
+    top_period_exception: int | None = None
 
 
 @dataclass(frozen=True)
@@ -51,13 +46,6 @@ class Candidate:
     line: str
     score: int
     order: int
-
-
-@dataclass(frozen=True)
-class PreviousInfo:
-    display: str
-    rankable: bool
-    reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -75,6 +63,8 @@ class SiteRule:
     anchor_pick: str = ""
     allow_weak_kill_sum_keyword: bool = False
     allowed_fetch_kinds: tuple[str, ...] = ()
+    browser_wait_selector: str = ""
+    browser_wait_anchor: str = ""
 
 
 @dataclass(frozen=True)

@@ -5,18 +5,24 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from he_app.config.settings import DEFAULT_FAILURE_OUTPUT_DIR, DEFAULT_OUTPUT_DIR, SITES_FILE
+from he_app.config.settings import (
+    DEFAULT_FAILURE_OUTPUT_DIR,
+    DEFAULT_OUTPUT_DIR,
+    SITES_FILE,
+)
 from he_app.config.sites import load_sites
 from he_app.domain.models import Site
 from he_app.storage.atomic_write import write_text_atomic
-from he_app.storage.success_cache import normalize_site_name
-from he_app.storage.failure_records import parse_failure_records
 
 
 @dataclass(frozen=True)
 class PeriodFailure:
     category: str
     reason: str
+
+
+def normalize_site_name(name: str) -> str:
+    return " ".join(name.split())
 
 
 def period_success_path(output_dir: Path, period: int) -> Path:
@@ -48,11 +54,39 @@ def parse_failure_lines(path: Path, period: int) -> dict[tuple[str, str], Period
     if not path.exists():
         return {}
 
-    return {
-        (normalize_site_name(record.name), record.url): PeriodFailure(record.category, record.reason)
-        for record in parse_failure_records(path.read_text(encoding="utf-8-sig"))
-        if record.period == period
-    }
+    failures: dict[tuple[str, str], PeriodFailure] = {}
+    current_pattern = re.compile(
+        r"^失败\s+(.+?)\s+(https?://\S+)\s+站点ID:\s*\S+\s+"
+        r"方向:\s*(\S+)\s+期数:\s*(\d+)\s+阶段:\s*\S+\s+"
+        r"失败类型:\s*(\S+)\s+具体原因:\s*(.*)$"
+    )
+    previous_pattern = re.compile(
+        r"^失败\s+(.+?)\s+(https?://\S+)\s+方向:\s*(\S+)\s+期数:\s*(\d+)\s+"
+        r"阶段:\s*(\S+)\s+原因:\s*(.*)$"
+    )
+    old_pattern = re.compile(
+        rf"^{re.escape(str(period))}期\s+(.+?)\s+(https?://\S+)\s+失败类型:\s*(\S+)\s+具体原因:\s*(.*)$"
+    )
+    for line in path.read_text(encoding="utf-8-sig", errors="ignore").splitlines():
+        normalized_line = line.strip()
+        match = current_pattern.match(normalized_line)
+        if match:
+            name, url, _pick, line_period, category, reason = match.groups()
+            if int(line_period) != period:
+                continue
+        else:
+            match = previous_pattern.match(normalized_line)
+            if match:
+                name, url, _pick, line_period, category, reason = match.groups()
+                if int(line_period) != period:
+                    continue
+            else:
+                match = old_pattern.match(normalized_line)
+                if not match:
+                    continue
+                name, url, category, reason = match.groups()
+        failures[(normalize_site_name(name), url)] = PeriodFailure(category, reason)
+    return failures
 
 
 def build_multi_period_failure_lines(
@@ -131,20 +165,18 @@ def build_single_period_command(
 
 
 def run_periods(args: argparse.Namespace) -> int:
+    if any(period < 1 for period in args.periods):
+        raise SystemExit("期数必须为正整数")
+    if len(set(args.periods)) != len(args.periods):
+        raise SystemExit("期数不能重复")
+    if args.timeout < 1:
+        raise SystemExit("--timeout 必须为正整数")
     output_dir = Path(args.output_dir).resolve()
     failure_output_dir = Path(args.failure_output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     failure_output_dir.mkdir(parents=True, exist_ok=True)
     sites_path = Path(args.sites).resolve()
     sites = load_sites(sites_path)
-    names = [normalize_site_name(site.name) for site in sites]
-    if len(set(names)) != len(names):
-        raise ValueError("旧成功TXT按名称记录，存在同名站时不能安全汇总")
-    if any(period < 1 for period in args.periods):
-        raise ValueError("期数必须为正整数")
-    if len(set(args.periods)) != len(args.periods):
-        raise ValueError("多期期数不能重复")
-    exit_codes = {}
 
     for period in args.periods:
         command = build_single_period_command(
@@ -157,20 +189,14 @@ def run_periods(args: argparse.Namespace) -> int:
             args.show_browser,
         )
         print(f"\n[多期] 开始抓取 {period}期", flush=True)
-        completed = subprocess.run(command, check=False)
-        exit_codes[period] = completed.returncode
+        subprocess.run(command, check=True)
 
     success_by_period = {
-        period: parse_success_names(period_success_path(output_dir, period)) if exit_codes[period] == 0 else set()
+        period: parse_success_names(period_success_path(output_dir, period))
         for period in args.periods
     }
     failures_by_period = {
         period: parse_failure_lines(period_fail_path(failure_output_dir, period), period)
-        if exit_codes[period] == 0 else {
-            (normalize_site_name(site.name), site.url): PeriodFailure(
-                "执行失败", f"本轮子进程退出码{exit_codes[period]}，未采用旧TXT")
-            for site in sites
-        }
         for period in args.periods
     }
     summary_path = (
@@ -183,7 +209,7 @@ def run_periods(args: argparse.Namespace) -> int:
     failed_count = count_all_failed_sites(sites, args.periods, success_by_period)
     print(f"\n[多期] 全部失败目录 {failed_count} 个，汇总保存到: {summary_path}")
     print("[多期] 已强制关闭 recent_10_cache.json 更新")
-    return int(any(code != 0 for code in exit_codes.values()))
+    return 0
 
 
 def build_arg_parser() -> argparse.ArgumentParser:

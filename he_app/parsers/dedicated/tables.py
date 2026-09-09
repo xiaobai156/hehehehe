@@ -5,12 +5,17 @@ import re
 from bs4 import BeautifulSoup
 
 from he_app.domain.errors import DedicatedCandidateConflict
-from he_app.domain.models import Candidate, PreviousInfo, Site, SiteRule
+from he_app.domain.models import Candidate, Site, SiteRule
 from he_app.domain.policies import normalize_digit_text, normalize_pick, normalize_text
 from he_app.parsers.common import *
 from he_app.parsers.policies import SITE_RULES, VALUE_RE
 from he_app.validation.conflict import select_unique_candidate
 from he_app.validation.direction import directional_window
+
+
+_TABLE_SECTION_STOP_RE = re.compile(
+    r"澳门六合彩合数属性|澳彩合数属性|合数属性|其他栏目|上一篇|下一篇|Copyright"
+)
 
 
 def clean_open_text(text: str) -> str:
@@ -54,31 +59,12 @@ def extract_values_from_kill_sum_row(text: str) -> list[str]:
     return values
 
 
-def evaluate_previous(previous: Candidate | None, previous_period: int) -> PreviousInfo:
-    if previous is None:
-        return PreviousInfo(f"{previous_period}期 未找到", False, "前一期没找到")
-
-    open_text, status = parse_open_status(previous.line)
-    if not has_valid_open_text(open_text):
-        return PreviousInfo(f"{previous_period}期 {previous.values} 没开奖号", False, "前一期没开奖号")
-    if status is None:
-        return PreviousInfo(f"{previous_period}期 {previous.values} 开{open_text} 没对错", False, "前一期没对错")
-    if status == "错":
-        return PreviousInfo(f"{previous_period}期 {previous.values} 开{open_text}{status}", False, "前一期错")
-
-    return PreviousInfo(f"{previous_period}期 {previous.values} 开{open_text}{status}", True)
-
-
 def format_success_result(site: Site, period: int, current: Candidate) -> str:
     return f"{current.values} {site.name}"
 
 
 def site_rule(site: Site) -> SiteRule:
     return SITE_RULES.get(site.site_id, SiteRule())
-
-
-def site_allows_strict_no_locator(site: Site) -> bool:
-    return not site_rule(site).require_body_locator
 
 
 def select_dedicated_candidate(
@@ -102,7 +88,10 @@ def has_period_cycle_boundary(text: str) -> bool:
     if re.search(r"分隔|另一个资料块|另一(?:个|组|版)资料", text):
         return True
     periods = [int(value) for value in re.findall(r"(?<!\d)(\d{1,4})\s*期", text)]
-    return any(abs(current - previous) > 180 for previous, current in zip(periods, periods[1:]))
+    return any(
+        abs(current - previous) > 180
+        for previous, current in zip(periods, periods[1:], strict=False)
+    )
 
 
 TableBlock = list[tuple[int, Candidate]]
@@ -124,10 +113,7 @@ def _tongtian_table_blocks(documents: list[str]) -> list[TableBlock]:
             if marker_index < 0 or "杀合" not in normalized[marker_index : marker_index + 80]:
                 continue
             section = normalized[marker_index:]
-            stop_match = re.search(
-                r"澳门六合彩合数属性|澳彩合数属性|合数属性|其他栏目|上一篇|下一篇|Copyright",
-                section,
-            )
+            stop_match = _TABLE_SECTION_STOP_RE.search(section)
             if stop_match is not None:
                 section = section[: stop_match.start()]
 
@@ -161,10 +147,6 @@ def find_tongtian_kill_sum_candidate_with_direction(
     documents: list[str], period: int, pick: str = "top"
 ) -> tuple[Candidate | None, bool]:
     return _select_table_period_candidate(_tongtian_table_blocks(documents), period, pick)
-
-
-def find_tongtian_kill_sum_candidate(documents: list[str], period: int) -> Candidate | None:
-    return find_tongtian_kill_sum_candidate_with_direction(documents, period, "top")[0]
 
 
 def _deduplicate_table_blocks(blocks: list[TableBlock]) -> list[TableBlock]:
@@ -266,14 +248,6 @@ def find_jiuxiao_kill_sum_candidate_with_direction(
     return _select_table_period_candidate(_jiuxiao_table_blocks(documents), period, pick)
 
 
-def find_jiuxiao_kill_sum_candidate(
-    documents: list[str],
-    period: int,
-    pick: str = "top",
-) -> Candidate | None:
-    return find_jiuxiao_kill_sum_candidate_with_direction(documents, period, pick)[0]
-
-
 def extract_jiuxiao_kill_sum_period_values(documents: list[str]) -> dict[int, str]:
     return _table_period_values(_jiuxiao_table_blocks(documents))
 
@@ -298,10 +272,7 @@ def _woman_flavor_table_blocks(documents: list[str]) -> list[TableBlock]:
         if anchor is None:
             continue
         section = text[anchor.start():]
-        stop_match = re.search(
-            r"澳门六合彩合数属性|澳彩合数属性|合数属性|其他栏目|上一篇|下一篇|Copyright",
-            section,
-        )
+        stop_match = _TABLE_SECTION_STOP_RE.search(section)
         if stop_match is not None:
             section = section[: stop_match.start()]
 
@@ -330,14 +301,6 @@ def find_woman_flavor_sum_candidate_with_direction(
     pick: str = "top",
 ) -> tuple[Candidate | None, bool]:
     return _select_table_period_candidate(_woman_flavor_table_blocks(documents), period, pick)
-
-
-def find_woman_flavor_sum_candidate(
-    documents: list[str],
-    period: int,
-    pick: str = "top",
-) -> Candidate | None:
-    return find_woman_flavor_sum_candidate_with_direction(documents, period, pick)[0]
 
 
 def extract_woman_flavor_sum_period_values(documents: list[str]) -> dict[int, str]:

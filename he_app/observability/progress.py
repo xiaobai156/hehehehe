@@ -32,17 +32,3 @@ def build_slow_site_lines(
         status = "成功" if success else "失败"
         lines.append(f"{rank}. {name} {elapsed_seconds:.1f}s {status}")
     return lines
-
-
-def build_all_site_timing_lines(timings: list[tuple[str, float, bool]]) -> list[str]:
-    if not timings:
-        return []
-
-    lines = ["", "所有目录耗时统计"]
-    for rank, (name, elapsed_seconds, success) in enumerate(
-        sorted(timings, key=lambda item: item[1], reverse=True),
-        start=1,
-    ):
-        status = "成功" if success else "失败"
-        lines.append(f"{rank}. {name} {elapsed_seconds:.1f}s {status}")
-    return lines

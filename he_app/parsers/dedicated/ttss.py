@@ -11,6 +11,7 @@ from he_app.domain.errors import DedicatedCandidateConflict
 from he_app.domain.models import Candidate
 from he_app.domain.policies import normalize_digit_text, normalize_text
 from he_app.parsers.common import score_candidate
+from he_app.parsers.policies import PERIOD_RE
 
 
 TTSS_YIKAO_SITE_ID = "s132_ttss_79_yikao"
@@ -19,9 +20,6 @@ TTSS_QIFENG_SITE_ID = "s134_ttss_79_qifeng"
 TTSS_SITE_IDS = frozenset({TTSS_YIKAO_SITE_ID, TTSS_CHENYUAN_SITE_ID, TTSS_QIFENG_SITE_ID})
 
 _ANY_SUM_RE = re.compile(r"(?<!\d)(\d{1,2})\s*合")
-_PERIOD_RE = re.compile(r"(?<!\d)(\d{1,4})\s*期")
-
-
 def _compact(text: str) -> str:
     return re.sub(r"\s+", "", normalize_digit_text(normalize_text(text)))
 
@@ -42,18 +40,6 @@ def _row_re(site_name: str) -> re.Pattern[str]:
 def _title_period(title: str, site_name: str) -> int | None:
     match = _target_title_re(site_name).fullmatch(_compact(title))
     return int(match.group("period")) if match is not None else None
-
-
-def find_ttss_article_link(
-    page_html: str,
-    page_url: str,
-    site_name: str,
-    period: int | None = None,
-) -> str | None:
-    """Return the exact same-period list link, never a neighbouring article."""
-
-    links = find_ttss_article_links(page_html, page_url, site_name, period)
-    return links[0] if links else None
 
 
 def find_ttss_article_links(
@@ -118,7 +104,7 @@ def _article_blocks(document: str, site_name: str) -> list[tuple[int, list[tuple
             if not 1 <= value <= 13:
                 continue
             row_period = int(match.group("period"))
-            if [int(item.group(1)) for item in _PERIOD_RE.finditer(line)] != [row_period]:
+            if [int(item.group(1)) for item in PERIOD_RE.finditer(line)] != [row_period]:
                 continue
             candidate = Candidate(
                 f"{value:02d}合",
@@ -162,37 +148,6 @@ def _raise_if_conflicting(rows: list[tuple[int, Candidate]]) -> None:
             )
         values_by_period[row_period] = candidate.values
         lines_by_period[row_period] = candidate.line
-
-
-def find_ttss_kill_sum_candidate(
-    documents: list[str], period: int, pick: str
-) -> Candidate | None:
-    blocks: list[list[tuple[int, Candidate]]] = []
-    all_rows: list[tuple[int, Candidate]] = []
-    for document in documents:
-        for article_period, rows in _article_blocks(document, _site_name_from_document(document)):
-            if article_period == period:
-                blocks.append(rows)
-            all_rows.extend(rows)
-
-    _raise_if_conflicting(all_rows)
-    if not blocks:
-        return None
-    selected = blocks[0] if pick in {"top", "顶部", "上", "前"} else blocks[-1]
-    edge = selected[0] if pick in {"top", "顶部", "上", "前"} else selected[-1]
-    return edge[1] if edge[0] == period else None
-
-
-def _site_name_from_document(document: str) -> str:
-    """Extract the title's name for internal parsing when the caller has one document."""
-
-    soup = BeautifulSoup(document, "html.parser")
-    title = soup.select_one(".detail .big-tit")
-    if title is None:
-        return ""
-    compact = _compact(title.get_text(" ", strip=True))
-    match = re.fullmatch(r"\d{1,4}期:(.+)[\[【]绝杀一合[\]】]已免费公开", compact)
-    return match.group(1) if match is not None else ""
 
 
 def find_ttss_kill_sum_candidate_for_site(

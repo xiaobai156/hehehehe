@@ -1,12 +1,28 @@
-import json
+import re
 import time
-from pathlib import Path
-from queue import Empty, Full, Queue
-from threading import Lock
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
+from queue import Full, Queue
+from threading import Lock, RLock, get_ident
+from typing import TypeVar
 
 from he_app.domain.models import Site, SourceDocument
-from he_app.domain.errors import SiteScrapeFailure
-from he_app.fetch.url_policy import StrictNetworkPolicy, same_origin_url, url_origin
+
+
+T = TypeVar("T")
+
+
+def selector_period_ready(texts: list[str], period: int, anchor: str = "") -> bool:
+    period_re = re.compile(rf"(?<!\d){re.escape(str(period))}\s*期")
+    compact_anchor = re.sub(r"\s+", "", anchor)
+    for text in texts:
+        normalized = str(text)
+        if compact_anchor and compact_anchor not in re.sub(r"\s+", "", normalized):
+            continue
+        if period_re.search(normalized):
+            return True
+    return False
 
 
 def advance_wait_state(
@@ -25,181 +41,224 @@ def advance_wait_state(
 
 
 class BrowserClient:
-    def __init__(self, headless: bool = True, network_policy=None):
+    def __init__(self, headless: bool = True):
         self.headless = headless
-        self.driver = None
         self.capture_sequence = 0
-        self.network_policy = network_policy if network_policy is not None else StrictNetworkPolicy(require_peer=True)
-        self.last_peer_ip = ""
-        self.last_resolved_addresses: tuple[str, ...] = ()
+        self._playwright = None
+        self._browser = None
+        self._context = None
+        self._page = None
+        self._executor: ThreadPoolExecutor | None = None
+        self._executor_lock = Lock()
+        self._lifecycle_lock = RLock()
+        self._owner_thread_id: int | None = None
+
+    def _ensure_executor(self) -> ThreadPoolExecutor:
+        with self._executor_lock:
+            if self._executor is None:
+                self._executor = ThreadPoolExecutor(
+                    max_workers=1,
+                    thread_name_prefix="he-playwright-browser",
+                )
+            return self._executor
+
+    def _run_on_owner(self, operation: Callable[[], T]) -> T:
+        current_thread_id = get_ident()
+        if self._owner_thread_id is None:
+            self._owner_thread_id = current_thread_id
+        elif self._owner_thread_id != current_thread_id:
+            raise RuntimeError("BrowserClient operation ran on the wrong thread")
+        return operation()
+
+    def _dispatch(self, operation: Callable[[], T]) -> T:
+        # Nested public calls must stay direct on the owner thread to avoid self-deadlock.
+        if self._owner_thread_id == get_ident():
+            return operation()
+        executor = self._ensure_executor()
+        return executor.submit(self._run_on_owner, operation).result()
+
+    def _close_resources_owner(self, suppress_errors: bool = False) -> None:
+        errors: list[BaseException] = []
+        resources = (
+            ("_page", "close"),
+            ("_context", "close"),
+            ("_browser", "close"),
+            ("_playwright", "stop"),
+        )
+        for attribute, method_name in resources:
+            resource = getattr(self, attribute)
+            setattr(self, attribute, None)
+            if resource is None:
+                continue
+            try:
+                getattr(resource, method_name)()
+            except BaseException as exc:
+                errors.append(exc)
+        if errors and not suppress_errors:
+            raise errors[0]
+
+    def _start_owner(self) -> None:
+        if self._page is not None:
+            return
+        from playwright.sync_api import sync_playwright
+
+        if any(resource is not None for resource in (self._playwright, self._browser, self._context)):
+            self._close_resources_owner(suppress_errors=True)
+        try:
+            self._playwright = sync_playwright().start()
+            self._browser = self._playwright.chromium.launch(
+                headless=self.headless,
+                args=["--no-sandbox", "--disable-dev-shm-usage"],
+            )
+            self._context = self._browser.new_context(
+                ignore_https_errors=True,
+                viewport={"width": 1600, "height": 2400},
+            )
+            self._page = self._context.new_page()
+        except BaseException:
+            self._close_resources_owner(suppress_errors=True)
+            raise
 
     def start(self) -> None:
-        if self.driver is not None:
-            return
-        from selenium import webdriver
-        from selenium.webdriver.chrome.options import Options as ChromeOptions
-        from selenium.webdriver.edge.options import Options as EdgeOptions
-
-        binary = self.find_browser_binary()
-        is_edge = bool(binary and Path(binary).name.lower().startswith("msedge"))
-        options = EdgeOptions() if is_edge else ChromeOptions()
-        options.page_load_strategy = "eager"
-        if self.headless:
-            options.add_argument("--headless=new")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--window-size=1600,2400")
-        options.add_argument("--no-proxy-server")
-        options.add_argument("--proxy-bypass-list=*")
-        options.add_argument("--disable-quic")
-        options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
-        if binary:
-            options.binary_location = binary
-        factory = webdriver.Edge if is_edge else webdriver.Chrome
-        self.driver = factory(options=options)
-
-    @staticmethod
-    def find_browser_binary() -> str | None:
-        candidates = [
-            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-        ]
-        return next((candidate for candidate in candidates if Path(candidate).exists()), None)
+        with self._lifecycle_lock:
+            self._dispatch(self._start_owner)
 
     def close(self) -> None:
-        if self.driver is not None:
-            self.driver.quit()
-            self.driver = None
+        if self._executor is None:
+            return
+        called_from_owner = self._owner_thread_id == get_ident()
+        with self._lifecycle_lock:
+            try:
+                self._dispatch(lambda: self._close_resources_owner())
+            finally:
+                self._shutdown_executor(wait=not called_from_owner)
+
+    def _shutdown_executor(self, wait: bool = True) -> None:
+        with self._executor_lock:
+            executor = self._executor
+            self._executor = None
+            self._owner_thread_id = None
+        if executor is not None:
+            executor.shutdown(wait=wait)
 
     def clear_site_state(self) -> None:
-        if self.driver is None:
+        if self._executor is None:
             return
-        self.driver.delete_all_cookies()
-        self.driver.execute_script("window.localStorage.clear(); window.sessionStorage.clear();")
-        self.driver.get("about:blank")
+        self._dispatch(self._clear_site_state_owner)
 
-    def get_document_state(self) -> tuple[int, int]:
+    def _clear_site_state_owner(self) -> None:
+        if self._page is None or self._context is None:
+            return
+        self._context.clear_cookies()
+        self._page.evaluate("() => { window.localStorage.clear(); window.sessionStorage.clear(); }")
+        self._page.goto("about:blank", wait_until="domcontentloaded")
+
+    def _get_document_state_owner(self) -> tuple[int, int]:
         body_text = ""
         page_source = ""
-        if self.driver is not None:
-            try:
-                body_text = self.driver.find_element("tag name", "body").text or ""
-            except Exception:
-                pass
-            try:
-                page_source = self.driver.page_source or ""
-            except Exception:
-                pass
+        if self._page is not None:
+            with suppress(Exception):
+                body_text = self._page.locator("body").inner_text() or ""
+            with suppress(Exception):
+                page_source = self._page.content() or ""
         return len(body_text.strip()), len(page_source)
 
-    def wait_for_document(self, max_wait: float, previous_state: tuple[int, int] | None = None) -> None:
-        deadline = time.monotonic() + max(0.0, max_wait)
+    def _wait_for_document_owner(
+        self, max_wait: float, previous_state: tuple[int, int] | None = None
+    ) -> None:
+        deadline = time.time() + max(0.0, max_wait)
         last_state = None
         stable_count = 0
         while True:
-            state = self.get_document_state()
+            state = self._get_document_state_owner()
             stable_count, ready = advance_wait_state(state, previous_state, last_state, stable_count)
-            if ready or time.monotonic() >= deadline:
+            if ready or time.time() >= deadline:
                 return
             last_state = state
             time.sleep(0.25)
 
-
-    def _clear_performance_log(self) -> None:
-        if self.driver is None or not hasattr(self.driver, "get_log"):
-            return
-        try:
-            self.driver.get_log("performance")
-        except Exception:
-            pass
-
-    def _document_remote_ips(self, expected_url: str) -> list[str]:
-        if self.driver is None or not hasattr(self.driver, "get_log"):
-            return []
-        expected_origin = url_origin(expected_url)
-        addresses: list[str] = []
-        try:
-            entries = self.driver.get_log("performance")
-        except Exception:
-            return []
-        for entry in entries:
-            try:
-                message = json.loads(entry.get("message", "{}"))["message"]
-                if message.get("method") != "Network.responseReceived":
-                    continue
-                params = message.get("params", {})
-                response = params.get("response", {})
-                if params.get("type") != "Document":
-                    continue
-                response_url = str(response.get("url", ""))
-                if url_origin(response_url) != expected_origin:
-                    continue
-                address = str(response.get("remoteIPAddress", "")).strip()
-                if address and address not in addresses:
-                    addresses.append(address)
-            except (KeyError, TypeError, ValueError, json.JSONDecodeError, SiteScrapeFailure):
-                continue
-        return addresses
-
-    def _verify_navigation_network(self, requested_url: str, resolved) -> None:
-        if self.driver is None:
+    def get_documents(
+        self,
+        url: str,
+        period: int,
+        click_first: bool,
+        timeout: int,
+        wait_selector: str = "",
+        wait_anchor: str = "",
+    ) -> list[str]:
+        if self._executor is None:
             raise RuntimeError("Browser is not started")
-        final_url = self.driver.current_url
-        same_origin_url(requested_url, final_url)
-        final_resolved = resolved
-        addresses = self._document_remote_ips(final_url)
-        if self.network_policy is not None and not addresses:
-            raise SiteScrapeFailure("站点身份错误", f"浏览器无法验证实际连接公网地址: {final_url}")
-        verified = [
-            self.network_policy.verify_address(
-                address,
-                context=f"浏览器连接 {final_resolved.host}",
-                resolved=final_resolved,
+        return self._dispatch(
+            lambda: self._get_documents_owner(
+                url, period, click_first, timeout, wait_selector, wait_anchor
             )
-            for address in addresses
-        ] if self.network_policy is not None else addresses
-        self.last_peer_ip = verified[-1] if verified else ""
-        self.last_resolved_addresses = tuple(final_resolved.addresses) if final_resolved is not None else ()
+        )
 
-    def get_documents(self, url: str, period: int, click_first: bool, timeout: int) -> list[str]:
-        if self.driver is None:
+    def _wait_for_selector_period_owner(
+        self,
+        selector: str,
+        anchor: str,
+        period: int,
+        max_wait: float,
+    ) -> bool:
+        if self._page is None or not selector:
+            return False
+        deadline = time.time() + max(0.0, max_wait)
+        while True:
+            try:
+                texts = self._page.locator(selector).all_inner_texts()
+            except Exception:
+                texts = []
+            if selector_period_ready(texts, period, anchor):
+                return True
+            if time.time() >= deadline:
+                return False
+            time.sleep(0.25)
+
+    def _get_documents_owner(
+        self,
+        url: str,
+        period: int,
+        click_first: bool,
+        timeout: int,
+        wait_selector: str = "",
+        wait_anchor: str = "",
+    ) -> list[str]:
+        if self._page is None:
             raise RuntimeError("Browser is not started")
-        url_origin(url)
-        resolved = self.network_policy.resolve(url) if self.network_policy is not None else None
-        self._clear_performance_log()
-        self.driver.set_page_load_timeout(timeout)
-        self.driver.get(url)
-        same_origin_url(url, self.driver.current_url)
-        self.wait_for_document(min(float(timeout), 5.0))
-        self.capture_sequence = 0
-        if click_first:
-            previous = self.get_document_state()
-            if self.try_click_labels():
-                same_origin_url(url, self.driver.current_url)
-                self.wait_for_document(min(float(timeout), 2.0), previous)
-            previous = self.get_document_state()
-            if not self.try_click_best_post(period):
-                raise SiteScrapeFailure("主页找帖失败", "没有唯一的同源指定期严格文章链接")
-            same_origin_url(url, self.driver.current_url)
-            self.wait_for_document(min(float(timeout), 3.0), previous)
-        self._verify_navigation_network(url, resolved)
-        # Navigation snapshots and list summaries are diagnostics, not alternate
-        # authorities that may rescue a failed final detail page.
-        documents = self.collect_documents(url)
-        return [documents[-1]] if documents else []
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
-    def collect_documents(self, url: str = "") -> list[str]:
-        if self.driver is None:
+        with suppress(PlaywrightTimeoutError):
+            self._page.goto(url, wait_until="domcontentloaded", timeout=int(timeout * 1000))
+        self._wait_for_document_owner(min(float(timeout), 5.0))
+        if wait_selector:
+            self._wait_for_selector_period_owner(
+                wait_selector,
+                wait_anchor,
+                period,
+                min(float(timeout), 10.0),
+            )
+        self.capture_sequence = 0
+        documents = self._collect_documents_owner(url)
+        if click_first:
+            previous_state = self._get_document_state_owner()
+            if self._try_click_labels_owner():
+                self._wait_for_document_owner(min(float(timeout), 2.0), previous_state)
+                documents.extend(self._collect_documents_owner(url))
+            for _ in range(2):
+                previous_state = self._get_document_state_owner()
+                if self._try_click_best_post_owner(period):
+                    self._wait_for_document_owner(min(float(timeout), 3.0), previous_state)
+                    documents.extend(self._collect_documents_owner(url))
+        return documents
+
+    def _collect_documents_owner(self, url: str = "") -> list[str]:
+        if self._page is None:
             return []
         try:
-            body_text = self.driver.find_element("tag name", "body").text
+            body_text = self._page.locator("body").inner_text()
         except Exception:
             body_text = ""
-        original_url = url
-        url = self.driver.current_url
-        if original_url:
-            same_origin_url(original_url, url)
         state_id = f"browser:{url}:state:{self.capture_sequence}"
         self.capture_sequence += 1
         return [
@@ -208,78 +267,79 @@ class BrowserClient:
                 source_url=url,
                 fetch_kind="browser",
                 document_type="body-text",
-                parent_url=original_url,
-                authority_id=state_id,
+                parent_url=url,
+                authority_id=f"{state_id}:body",
                 document_id=f"{state_id}:body",
-                peer_ip=self.last_peer_ip,
-                resolved_addresses=self.last_resolved_addresses,
             ),
             SourceDocument(
-                self.driver.page_source,
+                self._page.content(),
                 source_url=url,
                 fetch_kind="browser",
                 document_type="page-source",
-                parent_url=original_url,
-                authority_id=state_id,
+                parent_url=url,
+                authority_id=f"{state_id}:page-source",
                 document_id=f"{state_id}:page-source",
-                peer_ip=self.last_peer_ip,
-                resolved_addresses=self.last_resolved_addresses,
             ),
         ]
 
-    def try_click_labels(self) -> bool:
-        if self.driver is None:
+    def _try_click_labels_owner(self) -> bool:
+        if self._page is None:
             return False
         script = r"""
-        const labels = arguments[0];
-        for (const label of labels) {
-            for (const el of document.querySelectorAll("a,button,li,div,span")) {
-                const text = (el.innerText || "").replace(/\s+/g, "").trim();
-                if (!text || text.length > 40) continue;
-                const rect = el.getBoundingClientRect();
-                if (rect.width < 10 || rect.height < 10) continue;
-                if (text === label || text.includes(label)) { el.click(); return true; }
+        (labels) => {
+            for (const label of labels) {
+                for (const el of document.querySelectorAll("a,button,li,div,span")) {
+                    const text = (el.innerText || "").replace(/\s+/g, "").trim();
+                    if (!text || text.length > 40) continue;
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width < 10 || rect.height < 10) continue;
+                    if (text === label || text.includes(label)) { el.click(); return true; }
+                }
             }
+            return false;
         }
-        return false;
         """
         try:
-            return bool(self.driver.execute_script(script, ["高手论坛", "论坛", "帖子", "资料"]))
+            return bool(self._page.evaluate(script, ["高手论坛", "论坛", "帖子", "资料"]))
         except Exception:
             return False
 
-    def try_click_best_post(self, period: int) -> bool:
-        if self.driver is None:
+    def _try_click_best_post_owner(self, period: int) -> bool:
+        if self._page is None:
             return False
-        # Only actual navigable links; never score/click arbitrary parent DIVs.
         script = r"""
-        const periodRe = new RegExp("(?:^|[^0-9])" + String(arguments[0]) + "\\s*期");
-        const keywordRe = /绝\s*杀\s*一\s*合|公式\s*杀\s*合|绝\s*杀\s*合/;
-        const links = new Map();
-        for (const el of document.querySelectorAll("a[href]")) {
-            const text = (el.innerText || "").trim();
-            const rect = el.getBoundingClientRect();
-            if (!periodRe.test(text) || !keywordRe.test(text) || rect.width < 1 || rect.height < 1) continue;
-            const href = new URL(el.getAttribute("href"), location.href);
-            if (!/^https?:$/.test(href.protocol) || href.origin !== location.origin || href.href === location.href) continue;
-            links.set(href.href, el);
+        (period) => {
+            const periodText = String(period);
+            const keywordRe = /绝\s*杀\s*一\s*合|杀.{0,80}\d{1,2}\s*合/;
+            let best = null;
+            for (const el of document.querySelectorAll("a,article,li,section,div")) {
+                const text = (el.innerText || "").replace(/\s+/g, " ").trim();
+                if (!text || text.length < 6 || text.length > 900) continue;
+                const rect = el.getBoundingClientRect();
+                if (rect.width < 30 || rect.height < 12) continue;
+                let score = 0;
+                if (text.includes(periodText + "期")) score += 60;
+                if (keywordRe.test(text)) score += 80;
+                if (/\d{1,2}\s*合/.test(text)) score += 20;
+                if (/论坛|主页|首页|返回|登录|注册/.test(text)) score -= 30;
+                if (score < 80) continue;
+                const item = { el, score, top: rect.top };
+                if (!best || item.score > best.score || (item.score === best.score && item.top < best.top)) best = item;
+            }
+            if (!best) return false;
+            best.el.click();
+            return true;
         }
-        if (links.size > 1) return "conflict";
-        if (links.size !== 1) return "missing";
-        links.values().next().value.click();
-        return "clicked";
         """
-        status = self.driver.execute_script(script, period)
-        if status == "conflict":
-            raise SiteScrapeFailure("候选冲突", "浏览器命中多个不同目标文章链接")
-        return status == "clicked"
+        try:
+            return bool(self._page.evaluate(script, period))
+        except Exception:
+            return False
 
 
 def close_browser_safely(browser: BrowserClient) -> None:
-    try:
+    with suppress(Exception):
         browser.close()
-    except Exception:
-        pass
 
 
 class BrowserPool:
@@ -320,9 +380,7 @@ class BrowserPool:
                     client = self._create_client()
                     created.append(client)
                     self.available.put(client)
-            except Exception as exc:
-                self.failure = exc
-                self.started = True
+            except Exception:
                 with self.clients_lock:
                     for client in created:
                         self.clients.discard(client)
@@ -335,10 +393,8 @@ class BrowserPool:
         with self.clients_lock:
             if self.failure is None:
                 self.failure = exc
-        try:
+        with suppress(Full):
             self.available.put_nowait(self.failure_token)
-        except Full:
-            pass
 
     def _replace_after_cleanup_failure(self, client: BrowserClient) -> Exception | None:
         with self.clients_lock:
@@ -359,10 +415,7 @@ class BrowserPool:
             failure = self.failure
         if failure is not None:
             raise failure
-        try:
-            client = self.available.get(timeout=60.0)
-        except Empty as exc:
-            raise TimeoutError("浏览器池等待超过60秒") from exc
+        client = self.available.get()
         if client is self.failure_token:
             self.available.put(self.failure_token)
             with self.clients_lock:
@@ -409,8 +462,7 @@ class BrowserPool:
 
 
 def default_browser_pool_size(sites: list[Site], workers: int) -> int:
-    from he_app.services.document_sources import requires_browser
-    browser_site_count = sum(1 for site in sites if requires_browser(site))
+    browser_site_count = sum(1 for site in sites if site.browser)
     if browser_site_count == 0:
         return 0
     return min(3, max(1, workers), browser_site_count)

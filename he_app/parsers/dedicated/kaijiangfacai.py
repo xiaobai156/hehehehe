@@ -10,7 +10,7 @@ from he_app.validation.direction import directional_window
 
 KAIJIANGFACAI_SITE_ID = "s131_kjfc_234432"
 KAIJIANGFACAI_TITLE_RE = re.compile(
-    r"^开奖发财\s*\[\s*综合杀料\s*\]\s*11447\.COM$",
+    r"^开奖发财\s*\[\s*综合杀料\s*\].*$",
     re.I,
 )
 KAIJIANGFACAI_HEADERS = ("期数", "杀尾", "杀肖", "杀合", "杀波", "开奖")

@@ -4,43 +4,16 @@ from bs4 import BeautifulSoup
 
 from he_app.domain.models import Candidate, FailureInfo, Site
 from he_app.domain.policies import normalize_digit_text, normalize_pick, normalize_text
-from he_app.storage.failure_records import FailureRecord, serialize_failure_record
 from he_app.parsers.policies import (
     BODY_LOCATOR_RE,
     PERIOD_RE,
     REVERSE_VALUE_RE,
     STRICT_KILL_SUM_RE,
     STRICT_SUCCESS_VALUE_RE,
+    TWO_VALUE_KILL_SUM_RE,
     VALUE_RE,
     WEAK_KILL_SUM_RE,
 )
-
-
-class ScopedChunk(str):
-    """A text representation with a locator scoped to its actual DOM record."""
-    def __new__(cls, text: str, located: bool):
-        value = super().__new__(cls, text)
-        value.located = located
-        return value
-
-
-def _node_has_locator(tag) -> bool:
-    for node in [tag, *tag.parents]:
-        if getattr(node, "name", None) in {"article", "main", "table"} or "topic-content" in (node.get("class", []) if hasattr(node, "get") else []):
-            return True
-        if getattr(node, "name", None) in {"body", "html", "[document]"}:
-            break
-    # A parent DIV covering two unrelated sections is not a local locator.
-    if tag.find(["article", "section", "div", "p", "table", "tr", "li"]) is not None:
-        return False
-    return has_body_locator(tag.get_text(" ", strip=True))
-
-
-def _plain_text_locator(document: str) -> bool:
-    if BeautifulSoup(document, "html.parser").find() is None:
-        sections = re.split(r"(?:其他栏目|另一个栏目|第三个栏目|另一个资料块)", document)
-        return len(sections) == 1 and has_body_locator(document)
-    return False
 
 
 def document_text_lines(document: str) -> list[str]:
@@ -55,7 +28,7 @@ def candidate_chunks(document: str, period: int) -> list[str]:
     for tag in soup.find_all(["p", "div", "td", "tr", "li", "font", "span", "b", "strong"]):
         text = normalize_text(tag.get_text(" ", strip=True))
         if text:
-            chunks.append(ScopedChunk(text, _node_has_locator(tag)))
+            chunks.append(text)
 
     lines = [normalize_text(line) for line in soup.get_text("\n", strip=True).splitlines()]
     lines = [line for line in lines if line]
@@ -107,12 +80,15 @@ def split_all_period_segments(text: str) -> list[str]:
     return segments
 
 
-def has_kill_sum_keyword(text: str, allow_weak: bool = False) -> bool:
+def has_kill_sum_keyword(text: str, allow_weak: bool = False, value_count: int = 1) -> bool:
     normalized = normalize_digit_text(normalize_text(text))
-    return bool(STRICT_KILL_SUM_RE.search(normalized) or (allow_weak and WEAK_KILL_SUM_RE.search(normalized)))
+    strict = STRICT_KILL_SUM_RE.search(normalized) is not None
+    if value_count == 2:
+        strict = strict or TWO_VALUE_KILL_SUM_RE.search(normalized) is not None
+    return bool(strict or (allow_weak and WEAK_KILL_SUM_RE.search(normalized)))
 
 
-def extract_values(text: str, allow_weak: bool = False) -> list[str]:
+def extract_values(text: str, allow_weak: bool = False, value_count: int = 1) -> list[str]:
     normalized = normalize_digit_text(normalize_text(text))
     for marker in ("澳彩合数属性", "合数属性", "属性:", "属性：", "★★", "博彩必备", "站长宣言"):
         marker_index = normalized.find(marker)
@@ -120,7 +96,7 @@ def extract_values(text: str, allow_weak: bool = False) -> list[str]:
             normalized = normalized[:marker_index]
     normalized = re.split(r"\s0?1\s*[-－]\s*0?6\s*合|\s0?1\s*合\s*[:：]", normalized, maxsplit=1)[0]
 
-    if not has_kill_sum_keyword(normalized, allow_weak):
+    if not has_kill_sum_keyword(normalized, allow_weak, value_count):
         return []
 
     if has_out_of_range_value(normalized):
@@ -133,7 +109,7 @@ def extract_values(text: str, allow_weak: bool = False) -> list[str]:
     for match, is_reverse in sorted(matches, key=lambda item: item[0].start()):
         if is_reverse:
             tail = normalized[match.end() : match.end() + 2]
-            if tail.startswith("头") or tail.startswith("尾"):
+            if tail.startswith(("头", "尾")):
                 continue
         value = int(normalize_digit_text(match.group(1)))
         if 1 <= value <= 13:
@@ -152,7 +128,7 @@ def has_out_of_range_value(text: str) -> bool:
     for match, is_reverse in sorted(matches, key=lambda item: item[0].start()):
         if is_reverse:
             tail = normalized[match.end() : match.end() + 2]
-            if tail.startswith("头") or tail.startswith("尾"):
+            if tail.startswith(("头", "尾")):
                 continue
         value = int(normalize_digit_text(match.group(1)))
         if not 1 <= value <= 13:
@@ -210,83 +186,71 @@ def build_table_period_parts(chunk: str, period: int) -> list[str]:
 
 
 def period_numbers_in_text(text: str) -> list[int]:
-    numbers: list[int] = []
-    for match in PERIOD_RE.finditer(normalize_digit_text(normalize_text(text))):
-        try:
-            numbers.append(int(match.group(1)))
-        except ValueError:
-            continue
-    return numbers
+    return [
+        int(match.group(1))
+        for match in PERIOD_RE.finditer(normalize_digit_text(normalize_text(text)))
+    ]
 
 
-def is_strict_current_candidate(line: str, period: int, allow_weak: bool = False) -> bool:
+def is_strict_current_candidate(
+    line: str, period: int, allow_weak: bool = False, value_count: int = 1
+) -> bool:
     normalized = normalize_digit_text(normalize_text(line))
     periods = period_numbers_in_text(normalized)
     if not periods or periods[0] != period:
         return False
     if any(item != period for item in periods):
         return False
-    if not has_kill_sum_keyword(normalized, allow_weak):
+    if not has_kill_sum_keyword(normalized, allow_weak, value_count):
         return False
-    values = extract_values(normalized, allow_weak)
-    return len(values) == 1 and is_valid_success_value(values[0])
+    values = extract_values(normalized, allow_weak, value_count)
+    return len(values) == value_count and all(is_valid_success_value(value) for value in values)
 
 
-def is_strict_period_candidate(line: str, allow_weak: bool = False) -> bool:
+def is_strict_period_candidate(line: str, allow_weak: bool = False, value_count: int = 1) -> bool:
     normalized = normalize_digit_text(normalize_text(line))
     periods = period_numbers_in_text(normalized)
     if not periods:
         return False
     if any(item != periods[0] for item in periods):
         return False
-    if not has_kill_sum_keyword(normalized, allow_weak):
+    if not has_kill_sum_keyword(normalized, allow_weak, value_count):
         return False
-    values = extract_values(normalized, allow_weak)
-    return len(values) == 1 and is_valid_success_value(values[0])
+    values = extract_values(normalized, allow_weak, value_count)
+    return len(values) == value_count and all(is_valid_success_value(value) for value in values)
 
 
-def is_contained_duplicate_candidate(line: str, values: list[str], existing: list[str], allow_weak: bool = False) -> bool:
+def is_contained_duplicate_candidate(
+    line: str,
+    values: list[str],
+    existing: list[str],
+    allow_weak: bool = False,
+    value_count: int = 1,
+) -> bool:
     normalized = normalize_digit_text(normalize_text(line))
     for earlier in existing:
         earlier_normalized = normalize_digit_text(normalize_text(earlier))
         if earlier_normalized == normalized:
             return True
-        if earlier_normalized in normalized and extract_values(earlier_normalized, allow_weak) == values:
+        if earlier_normalized in normalized and extract_values(
+            earlier_normalized, allow_weak, value_count
+        ) == values:
             return True
     return False
 
 
-def _physical_parts(document: str, parts: list[tuple[str, bool]]) -> list[tuple[str, bool]]:
-    """Deduplicate DOM representations, not distinct physical occurrences.
-
-    An identical last row must still occupy the bottom boundary even if the
-    same text appeared earlier. All positions refer to this one document.
-    """
-    text = normalize_digit_text(normalize_text(
-        BeautifulSoup(document, "html.parser").get_text(" ", strip=True) or document))
-    positioned: dict[int, tuple[str, bool]] = {}
-    for line, located in parts:
-        normalized = normalize_digit_text(normalize_text(line))
-        for match in re.finditer(re.escape(normalized), text):
-            previous = positioned.get(match.start())
-            if previous is None or len(line) < len(previous[0]):
-                positioned[match.start()] = (line, located)
-            elif line == previous[0] and located:
-                positioned[match.start()] = (line, True)
-    return [positioned[position] for position in sorted(positioned)]
-
-
-def build_candidate_parts(documents: list[str], period: int, allow_weak: bool = False) -> list[tuple[str, bool]]:
+def build_candidate_parts(
+    documents: list[str], period: int, allow_weak: bool = False, value_count: int = 1
+) -> list[tuple[str, bool]]:
     parts: list[tuple[str, bool]] = []
+    seen: set[tuple[str, bool]] = set()
+    accepted_lines: list[str] = []
     for document in documents:
-        document_parts: list[tuple[str, bool]] = []
-        seen: set[tuple[str, bool]] = set()
-        accepted_lines: list[str] = []
-        if not has_kill_sum_keyword(document, allow_weak):
+        if not has_kill_sum_keyword(document, allow_weak, value_count):
             continue
-        plain_locator = _plain_text_locator(document)
+        document_has_locator = has_body_locator(document)
         for chunk in candidate_chunks(document, period):
-            chunk_has_locator = getattr(chunk, "located", plain_locator)
+            chunk_has_locator = document_has_locator or has_body_locator(chunk) or is_table_kill_sum_chunk(chunk)
             if is_table_kill_sum_chunk(chunk):
                 candidates = build_table_period_parts(chunk, period) or [chunk]
             else:
@@ -296,18 +260,19 @@ def build_candidate_parts(documents: list[str], period: int, allow_weak: bool = 
                 line = normalize_text(candidate)
                 if not line or len(line) > 260:
                     continue
-                if not is_strict_current_candidate(line, period, allow_weak):
+                if not is_strict_current_candidate(line, period, allow_weak, value_count):
                     continue
-                values = extract_values(line, allow_weak)
-                if is_contained_duplicate_candidate(line, values, accepted_lines, allow_weak):
+                values = extract_values(line, allow_weak, value_count)
+                if is_contained_duplicate_candidate(
+                    line, values, accepted_lines, allow_weak, value_count
+                ):
                     continue
                 key = (line, chunk_has_locator)
                 if key in seen:
                     continue
                 seen.add(key)
                 accepted_lines.append(line)
-                document_parts.append((line, chunk_has_locator))
-        parts.extend(_physical_parts(document, document_parts))
+                parts.append((line, chunk_has_locator))
     return parts
 
 
@@ -318,7 +283,7 @@ def latest_candidate_chunks(document: str) -> list[str]:
     for tag in soup.find_all(["p", "div", "td", "tr", "li", "font", "span", "b", "strong"]):
         text = normalize_text(tag.get_text(" ", strip=True))
         if text:
-            chunks.append(ScopedChunk(text, _node_has_locator(tag)))
+            chunks.append(text)
 
     lines = [normalize_text(line) for line in soup.get_text("\n", strip=True).splitlines()]
     chunks.extend(line for line in lines if line)
@@ -332,70 +297,39 @@ def build_latest_candidate_parts(
     documents: list[str],
     allow_weak: bool = False,
     stop_after: int | None = None,
+    value_count: int = 1,
 ) -> list[tuple[str, bool]]:
     parts: list[tuple[str, bool]] = []
+    seen: set[tuple[str, bool]] = set()
+    accepted_lines: list[str] = []
     for document in documents:
-        document_parts: list[tuple[str, bool]] = []
-        seen: set[tuple[str, bool]] = set()
-        accepted_lines: list[str] = []
-        if not has_kill_sum_keyword(document, allow_weak):
+        if not has_kill_sum_keyword(document, allow_weak, value_count):
             continue
-        plain_locator = _plain_text_locator(document)
+        document_has_locator = has_body_locator(document)
         for chunk in latest_candidate_chunks(document):
-            chunk_has_locator = getattr(chunk, "located", plain_locator)
-            if is_table_kill_sum_chunk(chunk):
-                candidates = split_all_period_segments(chunk) or [chunk]
-            else:
-                candidates = split_all_period_segments(chunk) or [chunk]
+            chunk_has_locator = document_has_locator or has_body_locator(chunk) or is_table_kill_sum_chunk(chunk)
+            candidates = split_all_period_segments(chunk) or [chunk]
 
             for candidate in candidates:
                 line = normalize_text(candidate)
                 if not line or len(line) > 260:
                     continue
-                if not is_strict_period_candidate(line, allow_weak):
+                if not is_strict_period_candidate(line, allow_weak, value_count):
                     continue
-                values = extract_values(line, allow_weak)
-                if is_contained_duplicate_candidate(line, values, accepted_lines, allow_weak):
+                values = extract_values(line, allow_weak, value_count)
+                if is_contained_duplicate_candidate(
+                    line, values, accepted_lines, allow_weak, value_count
+                ):
                     continue
                 key = (line, chunk_has_locator)
                 if key in seen:
                     continue
                 seen.add(key)
                 accepted_lines.append(line)
-                document_parts.append((line, chunk_has_locator))
-        parts.extend(_physical_parts(document, document_parts))
-        if stop_after is not None and len(parts) >= stop_after:
-            return parts[:stop_after]
+                parts.append((line, chunk_has_locator))
+                if stop_after is not None and len(parts) >= stop_after:
+                    return parts
     return parts
-
-
-def selected_latest_period_candidate(
-    documents: list[str],
-    pick: str,
-    require_body_locator: bool = True,
-    allow_weak: bool = False,
-) -> Candidate | None:
-    pick = normalize_pick(pick)
-    parts = build_latest_candidate_parts(documents, allow_weak)
-    if require_body_locator:
-        parts = [(line, has_locator) for line, has_locator in parts if has_locator]
-    if not parts:
-        return None
-
-    line, _ = parts[0] if pick == "top" else parts[-1]
-    values = extract_values(line, allow_weak)
-    if len(values) != 1:
-        return None
-    return Candidate(
-        values=",".join(values),
-        line=line,
-        score=score_candidate(line, values),
-        order=0,
-    )
-
-
-def should_apply_candidate_window(current_parts: list[tuple[str, bool]], all_parts: list[tuple[str, bool]]) -> bool:
-    return True
 
 
 def directional_candidate_window_parts(
@@ -415,67 +349,14 @@ def directional_candidate_window_parts(
     return [all_parts[0]] if pick == "top" else [all_parts[-1]]
 
 
-def ordered_candidate_window_parts(
-    all_parts: list[tuple[str, bool]],
-    pick: str,
-    allow_weak: bool = False,
-    period: int | None = None,
-    size: int = 1,
-) -> list[tuple[str, bool]]:
-    return directional_candidate_window_parts(all_parts, pick, size)
-
-
-def ordered_candidate_window_periods(
-    all_parts: list[tuple[str, bool]],
-    pick: str,
-    allow_weak: bool = False,
-    period: int | None = None,
-    size: int = 1,
-) -> set[int]:
-    edge = directional_candidate_window_parts(all_parts, pick, size)
-    return {
-        key[0]
-        for line, _has_locator in edge
-        for key in [candidate_window_key(line, allow_weak)]
-        if key is not None
-    }
-
-
-def candidate_window_lines(
-    all_parts: list[tuple[str, bool]],
-    pick: str,
-    period: int | None = None,
-    size: int = 1,
-) -> set[str]:
-    window_parts = ordered_candidate_window_parts(all_parts, pick, period=period, size=size)
-    return {
-        normalize_digit_text(normalize_text(line))
-        for line, _ in window_parts
-    }
-
-
-def candidate_window_key(line: str, allow_weak: bool = False) -> tuple[int, str] | None:
+def candidate_window_key(
+    line: str, allow_weak: bool = False, value_count: int = 1
+) -> tuple[int, str] | None:
     periods = period_numbers_in_text(line)
-    values = extract_values(line, allow_weak)
-    if not periods or len(values) != 1:
+    values = extract_values(line, allow_weak, value_count)
+    if not periods or len(values) != value_count:
         return None
-    return periods[0], values[0]
-
-
-def candidate_window_keys(
-    all_parts: list[tuple[str, bool]],
-    pick: str,
-    allow_weak: bool = False,
-    period: int | None = None,
-    size: int = 1,
-) -> set[tuple[int, str]]:
-    window_parts = ordered_candidate_window_parts(all_parts, pick, allow_weak, period, size)
-    keys = set()
-    for line, _ in window_parts:
-        key = candidate_window_key(line, allow_weak)
-        if key is not None:
-            keys.add(key)
-    return keys
+    return periods[0], ",".join(values)
 
 
 def window_basis_parts(
@@ -496,17 +377,18 @@ def current_candidates_outside_window(
     pick: str,
     require_body_locator: bool = True,
     allow_weak: bool = False,
+    value_count: int = 1,
 ) -> bool:
-    current_parts = build_candidate_parts(documents, period, allow_weak)
-    all_parts = build_latest_candidate_parts(documents, allow_weak)
+    current_parts = build_candidate_parts(documents, period, allow_weak, value_count)
+    all_parts = build_latest_candidate_parts(documents, allow_weak, value_count=value_count)
     if require_body_locator:
         current_parts = [(line, has_locator) for line, has_locator in current_parts if has_locator]
         all_parts = [(line, has_locator) for line, has_locator in all_parts if has_locator]
     all_parts = window_basis_parts(all_parts, current_parts, period, allow_weak)
-    if not current_parts or not all_parts or not should_apply_candidate_window(current_parts, all_parts):
+    if not current_parts or not all_parts:
         return False
     edge = directional_candidate_window_parts(all_parts, pick, 1)
-    edge_key = candidate_window_key(edge[0][0], allow_weak) if edge else None
+    edge_key = candidate_window_key(edge[0][0], allow_weak, value_count) if edge else None
     return edge_key is None or edge_key[0] != period
 
 
@@ -529,23 +411,27 @@ def find_candidate(
     pick: str,
     require_body_locator: bool = True,
     allow_weak: bool = False,
+    value_count: int = 1,
 ) -> Candidate | None:
-    parts = trusted_current_candidate_parts(documents, period, pick, require_body_locator, allow_weak)
-    return select_candidate_from_trusted_parts(parts, pick, allow_weak)
+    parts = trusted_current_candidate_parts(
+        documents, period, pick, require_body_locator, allow_weak, value_count
+    )
+    return select_candidate_from_trusted_parts(parts, pick, allow_weak, value_count)
 
 
 def select_candidate_from_trusted_parts(
     parts: list[tuple[str, bool]],
     pick: str,
     allow_weak: bool = False,
+    value_count: int = 1,
 ) -> Candidate | None:
     pick = normalize_pick(pick)
     candidates: list[Candidate] = []
     seen: set[tuple[str, str]] = set()
     order = 0
     for line, _ in parts:
-        values = extract_values(line, allow_weak)
-        if len(values) != 1:
+        values = extract_values(line, allow_weak, value_count)
+        if len(values) != value_count:
             continue
 
         values_text = ",".join(values)
@@ -579,6 +465,7 @@ def select_candidate_from_trusted_parts(
 def conflict_values_from_trusted_parts(
     parts: list[tuple[str, bool]],
     allow_weak: bool = False,
+    value_count: int = 1,
 ) -> tuple[list[str], list[str]]:
     values_by_line: list[tuple[str, str]] = []
     seen_lines: set[str] = set()
@@ -586,10 +473,10 @@ def conflict_values_from_trusted_parts(
         if line in seen_lines:
             continue
         seen_lines.add(line)
-        values = extract_values(line, allow_weak)
-        if len(values) != 1:
+        values = extract_values(line, allow_weak, value_count)
+        if len(values) != value_count:
             continue
-        values_by_line.append((values[0], line))
+        values_by_line.append((",".join(values), line))
     unique_values = sorted({value for value, _ in values_by_line}, key=lambda value: int(value[:2]))
     if len(unique_values) <= 1:
         return [], []
@@ -602,14 +489,17 @@ def trusted_candidate_with_conflict(
     pick: str,
     require_body_locator: bool = True,
     allow_weak: bool = False,
+    value_count: int = 1,
 ) -> tuple[Candidate | None, list[str], list[str]]:
     parts = trusted_current_candidate_parts(
-        documents, period, pick, require_body_locator, allow_weak
+        documents, period, pick, require_body_locator, allow_weak, value_count
     )
-    conflict_values, conflict_lines = conflict_values_from_trusted_parts(parts, allow_weak)
+    conflict_values, conflict_lines = conflict_values_from_trusted_parts(
+        parts, allow_weak, value_count
+    )
     if conflict_values:
         return None, conflict_values, conflict_lines
-    return select_candidate_from_trusted_parts(parts, pick, allow_weak), [], []
+    return select_candidate_from_trusted_parts(parts, pick, allow_weak, value_count), [], []
 
 
 def trusted_current_candidate_parts(
@@ -618,19 +508,20 @@ def trusted_current_candidate_parts(
     pick: str,
     require_body_locator: bool = True,
     allow_weak: bool = False,
+    value_count: int = 1,
 ) -> list[tuple[str, bool]]:
     pick = normalize_pick(pick)
-    parts = build_candidate_parts(documents, period, allow_weak)
+    parts = build_candidate_parts(documents, period, allow_weak, value_count)
     if require_body_locator:
         parts = [(line, has_locator) for line, has_locator in parts if has_locator]
-    all_parts = build_latest_candidate_parts(documents, allow_weak)
+    all_parts = build_latest_candidate_parts(documents, allow_weak, value_count=value_count)
     if require_body_locator:
         all_parts = [(line, has_locator) for line, has_locator in all_parts if has_locator]
     all_parts = window_basis_parts(all_parts, parts, period, allow_weak)
     edge = directional_candidate_window_parts(all_parts, pick, 1)
     if not edge:
         return []
-    edge_key = candidate_window_key(edge[0][0], allow_weak)
+    edge_key = candidate_window_key(edge[0][0], allow_weak, value_count)
     if edge_key is None or edge_key[0] != period:
         return []
 
@@ -647,29 +538,9 @@ def trusted_current_candidate_parts(
     return matching[:1] if matching else edge[:1]
 
 
-def conflicting_trusted_candidate_values(
-    documents: list[str],
-    period: int,
-    pick: str,
-    require_body_locator: bool = True,
-    allow_weak: bool = False,
-) -> tuple[list[str], list[str]]:
-    parts = trusted_current_candidate_parts(documents, period, pick, require_body_locator, allow_weak)
-    return conflict_values_from_trusted_parts(parts, allow_weak)
-
-
-def collect_period_lines(documents: list[str], period: int, allow_weak: bool = False) -> list[str]:
-    lines: list[str] = []
-    seen: set[str] = set()
-    for line, _ in build_candidate_parts(documents, period, allow_weak):
-        if line in seen:
-            continue
-        seen.add(line)
-        lines.append(line)
-    return lines
-
-
-def diagnose_candidate_state(documents: list[str], period: int, allow_weak: bool = False) -> dict[str, bool]:
+def diagnose_candidate_state(
+    documents: list[str], period: int, allow_weak: bool = False, value_count: int = 1
+) -> dict[str, bool]:
     state = {
         "has_period": False,
         "has_keyword": False,
@@ -680,9 +551,9 @@ def diagnose_candidate_state(documents: list[str], period: int, allow_weak: bool
     }
 
     for document in documents:
-        plain_locator = _plain_text_locator(document)
+        document_has_locator = has_body_locator(document)
         for chunk in candidate_chunks(document, period):
-            chunk_has_locator = getattr(chunk, "located", plain_locator)
+            chunk_has_locator = document_has_locator or has_body_locator(chunk) or is_table_kill_sum_chunk(chunk)
             candidates = split_period_segments(chunk, period) or [chunk]
             for candidate in candidates:
                 line = normalize_digit_text(normalize_text(candidate))
@@ -690,15 +561,15 @@ def diagnose_candidate_state(documents: list[str], period: int, allow_weak: bool
                 if period not in periods:
                     continue
                 state["has_period"] = True
-                if not has_kill_sum_keyword(line, allow_weak):
+                if not has_kill_sum_keyword(line, allow_weak, value_count):
                     continue
                 state["has_keyword"] = True
-                values = extract_values(line, allow_weak)
+                values = extract_values(line, allow_weak, value_count)
                 if len(values) > 1:
                     state["has_multiple_values"] = True
-                if len(values) == 1 and is_valid_success_value(values[0]):
+                if len(values) == value_count and all(is_valid_success_value(value) for value in values):
                     state["has_valid_value"] = True
-                if is_strict_current_candidate(line, period, allow_weak):
+                if is_strict_current_candidate(line, period, allow_weak, value_count):
                     state["has_strict_candidate"] = True
                     if chunk_has_locator:
                         state["has_locator"] = True
@@ -706,8 +577,14 @@ def diagnose_candidate_state(documents: list[str], period: int, allow_weak: bool
     return state
 
 
-def analyze_missing_reason(documents: list[str], period: int, pick: str = "", allow_weak: bool = False) -> tuple[str, str]:
-    parts = build_candidate_parts(documents, period, allow_weak)
+def analyze_missing_reason(
+    documents: list[str],
+    period: int,
+    pick: str = "",
+    allow_weak: bool = False,
+    value_count: int = 1,
+) -> tuple[str, str]:
+    parts = build_candidate_parts(documents, period, allow_weak, value_count)
     region = pick_region_label(pick)
     if not parts:
         state = diagnose_candidate_state(documents, period, allow_weak)
@@ -726,7 +603,7 @@ def analyze_missing_reason(documents: list[str], period: int, pick: str = "", al
 
     quantity_failed = False
     for line, _ in parts:
-        values = extract_values(line, allow_weak)
+        values = extract_values(line, allow_weak, value_count)
         if len(values) > 1:
             quantity_failed = True
 
@@ -825,10 +702,11 @@ def format_failure_result(
     site_prefix = f"{site.name} "
     if reason.startswith(site_prefix):
         reason = reason[len(site_prefix) :].lstrip()
-    return serialize_failure_record(FailureRecord(
-        site.site_id, site.name, site.url, site.pick, period,
-        failure.category, failure_stage(failure.category), reason,
-    ))
+    return (
+        f"失败 {site.name} {site.url} 站点ID: {site.site_id or '未配置'} "
+        f"方向: {site.pick} 期数: {period} 阶段: {failure_stage(failure.category)} "
+        f"失败类型: {failure.category} 具体原因: {reason}"
+    )
 
 
 __all__ = [

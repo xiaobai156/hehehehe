@@ -12,6 +12,9 @@ STRICT_KILL_SUM_RE = re.compile(
     r"公式\s*杀\s*合|公式\s*殺\s*合|"
     r"绝\s*杀\s*合|絕\s*殺\s*合"
 )
+TWO_VALUE_KILL_SUM_RE = re.compile(
+    r"(?:绝|絕|决|決)\s*杀\s*(?:二|两|2|②)\s*合"
+)
 WEAK_KILL_SUM_RE = re.compile(
     r"[杀殺]\s*(?:一|1|①)?\s*合"
 )
@@ -24,9 +27,7 @@ STRICT_NO_LOCATOR_SITE_IDS = {
     "s061_fllxjy",
     "s081_users_2121",
     "s082_users_3722",
-    "s079_users_3722",
     "s080_forums_15361483",
-    "s081_topic_281519",
     "s087_enpcjg",
     "s088_mm_737799b_art_8129",
     "s090_667755_gsb_022",
@@ -75,14 +76,16 @@ SITE_RULES["s002_topic_247357"] = SiteRule(
     require_body_locator=False,
     note="strict current-period bottom candidate without reliable body locator",
 )
-SITE_RULES["s011_sk7_fago"] = SiteRule(
-    note="site uses weak 杀①合 wording",
-    allow_weak_kill_sum_keyword=True,
-)
 SITE_RULES["s013_topic_226261"] = SiteRule(
     require_body_locator=False,
     note="bottom edge strict candidate without reliable body locator",
     allowed_fetch_kinds=("legacy", "http", "http-decoded", "browser"),
+)
+SITE_RULES["s014_topic_242281"] = SiteRule(
+    require_body_locator=False,
+    note="anchor 作者:可怜盆栽 then select the top row in that article block",
+    anchor_text="作者:可怜盆栽",
+    latest_after_anchor=True,
 )
 SITE_RULES["s026_topic_504960"] = SiteRule(
     require_body_locator=False,
@@ -243,6 +246,27 @@ SITE_RULES["s060_topic_589491"] = SiteRule(
     require_body_locator=False,
     note="bottom special archive candidate from verified rendered page",
     allowed_fetch_kinds=("legacy", "http", "http-decoded", "browser"),
+    browser_wait_selector=".box-theme01d",
+    browser_wait_anchor="绝杀一合",
+)
+SITE_RULES["s087_enpcjg"] = SiteRule(
+    require_body_locator=False,
+    note="rendered 嫦娥彩报绝杀一合 block; same box only",
+    allowed_fetch_kinds=("browser",),
+    browser_wait_selector="#content-css16 .box-theme01",
+    browser_wait_anchor="嫦娥彩报╠绝杀一合╣",
+)
+SITE_RULES["s131_kjfc_234432"] = SiteRule(
+    note="rendered 开奖发财综合杀料 table; wait for the requested period in the same box",
+    browser_wait_selector=".box.pad",
+    browser_wait_anchor="开奖发财【综合杀料】",
+)
+SITE_RULES["s148_topic_805245"] = SiteRule(
+    require_body_locator=False,
+    note="Playwright-rendered topic 805245 黑胡椒酱绝杀合数 block",
+    allowed_fetch_kinds=("browser",),
+    browser_wait_selector=".cgi-body",
+    browser_wait_anchor="黑胡椒酱【绝杀合数】",
 )
 SITE_RULES["s064_topic_268622"] = SiteRule(
     require_body_locator=False,
@@ -284,8 +308,8 @@ SITE_RULES["s027_topic_436712"] = SiteRule(
 )
 SITE_RULES["s032_topic_309383"] = SiteRule(
     require_body_locator=False,
-    note="anchor 踏雪无痕网 then selected data row must match manual period",
-    anchor_text="踏雪无痕网",
+    note="anchor title 踏雪无痕网【绝杀一合】; never use the displayed website address",
+    anchor_text="踏雪无痕网【绝杀一合】",
     latest_after_anchor=True,
 )
 SITE_RULES["s033_topic_309365"] = SiteRule(
@@ -340,6 +364,47 @@ SITE_RULES["s073_shuqhbq"] = SiteRule(
     require_body_locator=False,
     note="dedicated 绝杀①段①合 table parser, sum column only",
 )
+SITE_RULES["s135_topic_481646"] = SiteRule(
+    require_body_locator=False,
+    note="browser-rendered named author block; explicitly configured two-sum rows",
+    anchor_text="争强斗胜",
+    latest_after_anchor=True,
+    allowed_fetch_kinds=("browser",),
+)
+SITE_RULES["s136_topic_677676"] = SiteRule(
+    require_body_locator=False,
+    note="browser-rendered named author block; explicitly configured two-sum rows",
+    anchor_text="心狠手辣",
+    latest_after_anchor=True,
+    allowed_fetch_kinds=("browser",),
+)
+SITE_RULES["s137_topic_682109"] = SiteRule(
+    require_body_locator=False,
+    note="browser-rendered named author block; explicitly configured two-sum rows",
+    anchor_text="万籁屿歌",
+    latest_after_anchor=True,
+    allowed_fetch_kinds=("browser",),
+)
+SITE_RULES["s138_gsx_20"] = SiteRule(
+    require_body_locator=False,
+    note="HTTP static named two-sum block; bottom edge row only",
+)
+for _site_id in {
+    "s139_article_140_tid_8",
+    "s140_article_245_tid_16",
+    "s141_article_359_tid_23",
+    "s142_article_377_tid_24",
+    "s143_article_392_tid_25",
+    "s144_article_435_tid_29",
+    "s145_article_546_tid_35",
+    "s146_article_600_tid_40",
+    "s147_article_654_tid_44",
+}:
+    SITE_RULES[_site_id] = SiteRule(
+        require_body_locator=False,
+        note="Article/ar_content exact article block; top edge row only",
+        allowed_fetch_kinds=("http",),
+    )
 
 BODY_LOCATOR_RE = re.compile(
     r"期数|开奖|作者|楼主|發布|发布|发表于|發表於|发表于|發表于|发贴于|發貼於|"

@@ -18,10 +18,34 @@ def extract_kill_sum_period_values(
     documents: list[str],
     pick: str = "top",
     allow_weak: bool = False,
+    value_count: int = 1,
 ) -> dict[int, str]:
     values: dict[int, str] = {}
     conflicts: set[int] = set()
     pick = normalize_pick(pick)
+    if value_count == 2:
+        for document in documents:
+            for line in document_text_lines(document):
+                normalized = normalize_digit_text(normalize_text(line))
+                if not has_kill_sum_keyword(normalized, allow_weak, value_count):
+                    continue
+                periods = period_numbers_in_text(normalized)
+                extracted = extract_values(normalized, allow_weak, value_count)
+                if len(periods) != 1 or len(extracted) != value_count:
+                    continue
+                period = periods[0]
+                item = ",".join(extracted)
+                if period in conflicts:
+                    continue
+                existing = values.get(period)
+                if existing is not None and existing != item:
+                    conflicts.add(period)
+                    values.pop(period, None)
+                    continue
+                if existing is None or pick == "bottom":
+                    values[period] = item
+        return values
+
     patterns = [
         re.compile(
             r"(?<!\d)(\d{1,4})\s*期\s*[:：]?\s*绝\s*杀\s*一\s*合\s*[\(\[]\s*"
@@ -130,13 +154,13 @@ def find_yidianhong_kill_sum_candidate(documents: list[str], period: int, pick: 
                 groups.append(matches)
 
     selected_groups = directional_window(groups, pick, 1)
-    matches = [
+    period_candidates = [
         candidate
         for group in selected_groups
         for row_period, candidate in directional_window(group, pick, 1)
         if row_period == period
     ]
-    return select_dedicated_candidate(matches, pick)
+    return select_dedicated_candidate(period_candidates, pick)
 
 
 def find_youzuichunshe_kill_sum_candidate(documents: list[str], period: int, pick: str) -> Candidate | None:
@@ -599,6 +623,7 @@ DEDICATED_SITE_IDS = BATCH_NEW_DEDICATED_SITE_IDS | {
     "s058_vkjwinyt",
     "s059_topic_324760",
     "s060_topic_589491",
+    "s087_enpcjg",
     "s069_topic_682018",
     "s070_topic_246762",
     "s071_topic_768615",
@@ -814,9 +839,15 @@ def find_directional_cycle_kill_sum_candidate(
     return None, outside
 
 
-SAIMAHUI_HISTORY_ROW_RE = re.compile(
+_ARCHIVE_HISTORY_ROW_RE = re.compile(
     r"(?<!\d)(\d{1,4})\s*期\s*[:：]?\s*绝\s*杀\s*一\s*合\s*"
     r"[\[【]\s*(0?[1-9]|1[0-3])\s*合\s*[\]】]\s*[开開]\s*[:：]?",
+    re.I,
+)
+SAIMAHUI_HISTORY_ROW_RE = CHANGE_ARCHIVE_ROW_RE = _ARCHIVE_HISTORY_ROW_RE
+
+CHANGE_ARCHIVE_HEADER_RE = re.compile(
+    r"嫦\s*娥\s*彩\s*报.*?绝\s*杀\s*一\s*合",
     re.I,
 )
 
@@ -854,9 +885,67 @@ def find_saima_archive_kill_sum_candidate(
 
     if not blocks:
         return None, False, False
+    period_re = re.compile(rf"(?<!\d){re.escape(str(period))}\s*期")
+    period_matches = [
+        candidate
+        for block in blocks
+        for candidate in block
+        if period_re.search(candidate.line)
+    ]
+    if period_matches:
+        select_dedicated_candidate(period_matches, pick, detect_conflict=True)
     selected_block = directional_window(blocks, pick, 1)[0]
     window = directional_window(selected_block, pick, 1)
+    matches = [candidate for candidate in window if period_re.search(candidate.line)]
+    if matches:
+        return select_dedicated_candidate(matches, pick, detect_conflict=True), False, True
+    outside = any(period_re.search(candidate.line) for block in blocks for candidate in block)
+    return None, outside, True
+
+
+def find_change_archive_kill_sum_candidate(
+    documents: list[str], period: int, pick: str
+) -> tuple[Candidate | None, bool, bool]:
+    blocks: list[list[Candidate]] = []
+    seen: set[tuple[tuple[int, str], ...]] = set()
+    order = 0
+    for document in documents:
+        soup = BeautifulSoup(document, "html.parser")
+        for archive in soup.select("#content-css16 .box-theme01"):
+            header = archive.select_one("table.ptyx")
+            content = archive.select_one(".dz_content08aa")
+            if header is None or content is None:
+                continue
+            header_text = normalize_digit_text(normalize_text(header.get_text(" ", strip=True)))
+            if CHANGE_ARCHIVE_HEADER_RE.search(header_text) is None:
+                continue
+            content_text = normalize_digit_text(normalize_text(content.get_text(" ", strip=True)))
+            rows: list[tuple[int, Candidate]] = []
+            for match in CHANGE_ARCHIVE_ROW_RE.finditer(content_text):
+                row_period = int(match.group(1))
+                value = f"{int(match.group(2)):02d}合"
+                line = normalize_text(match.group(0))
+                rows.append((row_period, Candidate(value, line, score_candidate(line, [value]), order)))
+                order += 1
+            signature = tuple((row_period, candidate.values) for row_period, candidate in rows)
+            if len(rows) < 3 or signature in seen:
+                continue
+            seen.add(signature)
+            blocks.append([candidate for _row_period, candidate in rows])
+
+    if not blocks:
+        return None, False, False
     period_re = re.compile(rf"(?<!\d){re.escape(str(period))}\s*期")
+    period_matches = [
+        candidate
+        for block in blocks
+        for candidate in block
+        if period_re.search(candidate.line)
+    ]
+    if period_matches:
+        select_dedicated_candidate(period_matches, pick, detect_conflict=True)
+    selected_block = directional_window(blocks, pick, 1)[0]
+    window = directional_window(selected_block, pick, 1)
     matches = [candidate for candidate in window if period_re.search(candidate.line)]
     if matches:
         return select_dedicated_candidate(matches, pick, detect_conflict=True), False, True
@@ -1150,11 +1239,11 @@ def find_baxianguohai_kill_sum_candidate(
     return select_dedicated_candidate(matches, pick)
 
 
-def anchor_document_blocks(site: Site, documents: list[str]) -> tuple[list[str], bool]:
-    """Share the same author boundary between daily parsing and history extraction."""
+def _collect_anchor_blocks(site: Site, documents: list[str]) -> tuple[bool, list[str]]:
     rule = site_rule(site)
     if not rule.anchor_text or not rule.latest_after_anchor:
-        return [], False
+        return False, []
+
     anchor_text = normalize_digit_text(normalize_text(rule.anchor_text))
     strict_author_block = site.site_id in {
         "s004_topic_225401",
@@ -1195,9 +1284,7 @@ def anchor_document_blocks(site: Site, documents: list[str]) -> tuple[list[str],
                         if strict_author_block
                         else published_prefix_re.search(normalized_lines[next_index]) is not None
                         if strict_published_block
-                        else (anchor_text in normalized_lines[next_index]
-                              or author_prefix_re.search(normalized_lines[next_index]) is not None
-                              or published_prefix_re.search(normalized_lines[next_index]) is not None)
+                        else anchor_text in normalized_lines[next_index]
                     )
                 ),
                 len(lines),
@@ -1218,7 +1305,20 @@ def anchor_document_blocks(site: Site, documents: list[str]) -> tuple[list[str],
             block_lines.extend(lines[index + 1 : next_anchor_index])
             anchor_blocks.append("\n".join(block_lines))
 
-    return anchor_blocks, found_anchor
+    return found_anchor, anchor_blocks
+
+
+def extract_anchor_kill_sum_period_values(site: Site, documents: list[str]) -> dict[int, str]:
+    _found_anchor, anchor_blocks = _collect_anchor_blocks(site, documents)
+    if not anchor_blocks:
+        return {}
+    rule = site_rule(site)
+    return extract_kill_sum_period_values(
+        anchor_blocks,
+        pick=site.pick,
+        allow_weak=rule.allow_weak_kill_sum_keyword,
+        value_count=site.value_count,
+    )
 
 
 def find_anchor_latest_candidate(
@@ -1231,8 +1331,7 @@ def find_anchor_latest_candidate(
     if not rule.anchor_text or not rule.latest_after_anchor:
         return None, None, None
 
-    anchor_blocks, found_anchor = anchor_document_blocks(site, documents)
-
+    found_anchor, anchor_blocks = _collect_anchor_blocks(site, documents)
     if anchor_blocks:
         candidate, conflict_values, conflict_lines = trusted_candidate_with_conflict(
             anchor_blocks,
@@ -1240,6 +1339,7 @@ def find_anchor_latest_candidate(
             pick,
             require_body_locator=False,
             allow_weak=rule.allow_weak_kill_sum_keyword,
+            value_count=site.value_count,
         )
         if conflict_values:
             return (
@@ -1250,12 +1350,40 @@ def find_anchor_latest_candidate(
             )
         if candidate is not None:
             return candidate, None, None
+        if site.top_period_exception == period and pick == "top":
+            exception_parts = build_candidate_parts(
+                anchor_blocks,
+                period,
+                rule.allow_weak_kill_sum_keyword,
+                site.value_count,
+            )
+            exception_values, exception_lines = conflict_values_from_trusted_parts(
+                exception_parts,
+                rule.allow_weak_kill_sum_keyword,
+                site.value_count,
+            )
+            if exception_values:
+                return (
+                    None,
+                    "候选冲突",
+                    f"{site.name} {period}期特例候选结果冲突: "
+                    f"{' / '.join(exception_values)}；候选: {' | '.join(exception_lines[:5])}",
+                )
+            exception_candidate = select_candidate_from_trusted_parts(
+                exception_parts,
+                "top",
+                rule.allow_weak_kill_sum_keyword,
+                site.value_count,
+            )
+            if exception_candidate is not None:
+                return exception_candidate, None, None
         if current_candidates_outside_window(
             anchor_blocks,
             period,
             pick,
             require_body_locator=False,
             allow_weak=rule.allow_weak_kill_sum_keyword,
+            value_count=site.value_count,
         ):
             return None, "超出范围", f"{site.name} 作者块下{period}期严格候选不是{directional_three_label(pick)}高可信候选边界"
         return None, "未找到目标", f"{site.name} 作者块下没找到{period}期严格杀合数据"

@@ -8,9 +8,9 @@ from bs4 import BeautifulSoup
 from he_app.domain.errors import SiteScrapeFailure
 from he_app.domain.models import Site, SourceDocument
 from he_app.domain.policies import normalize_digit_text, normalize_text
+from he_app.fetch.browser import BrowserClient
 from he_app.fetch.discovery import SCRIPT_RE, collect_documents, collect_page_documents, decode_strdecode_blocks
 from he_app.fetch.http import fetch_text
-from he_app.fetch.url_policy import same_origin_url
 from he_app.parsers.common import (
     extract_values,
     has_kill_sum_keyword,
@@ -27,6 +27,10 @@ from he_app.parsers.dedicated.ttss import (
     find_ttss_article_links,
     find_ttss_next_page_url,
     ttss_article_title_period,
+)
+from he_app.parsers.dedicated.article_content import (
+    ARTICLE_CONTENT_SITE_IDS,
+    article_content_rule,
 )
 
 
@@ -45,28 +49,26 @@ def dynamic_topic_index_url(site: Site) -> str:
 
 
 def find_dynamic_home_topic_url(site: Site, documents: list[str], period: int | None = None) -> str | None:
-    eligible: dict[str, int] = {}
+    eligible_links: list[tuple[int, str]] = []
     for document in documents:
-        for link in BeautifulSoup(document, "html.parser").find_all("a", href=True):
+        soup = BeautifulSoup(document, "html.parser")
+        for link in soup.find_all("a", href=True):
             text = normalize_digit_text(normalize_text(link.get_text(" ", strip=True)))
             compact = re.sub(r"\s+", "", text)
-            if re.sub(r"\s+", "", site.name) not in compact or "绝杀一合" not in compact:
+            if site.name not in compact or "绝杀一合" not in compact:
                 continue
-            title_periods = [int(value) for value in re.findall(r"(?<!\d)(\d{1,4})期", compact)]
-            allowed = {period, period + 1} if period is not None and site.site_id in CURRENT_OR_NEXT_TOPIC_SITE_IDS else {period}
-            matched = [value for value in title_periods if value in allowed]
-            if period is not None and not matched:
+            if period is not None and site.site_id in CURRENT_OR_NEXT_TOPIC_SITE_IDS:
+                periods = [int(value) for value in re.findall(r"(?<!\d)(\d{1,4})期", compact)]
+                matching = [value for value in periods if value in {period, period + 1}]
+                if matching:
+                    eligible_links.append(
+                        (min(abs(value - period) for value in matching), urljoin(dynamic_topic_index_url(site), str(link["href"])))
+                    )
                 continue
-            target = same_origin_url(dynamic_topic_index_url(site), str(link["href"]))
-            score = min(abs(value - period) for value in matched) if matched else 0
-            eligible[target] = min(eligible.get(target, score), score)
-    if not eligible:
-        return None
-    best_score = min(eligible.values())
-    targets = [url for url, score in eligible.items() if score == best_score]
-    if len(targets) != 1:
-        raise SiteScrapeFailure("候选冲突", f"{site.name} 标题匹配多个不同文章: {' / '.join(targets)}")
-    return targets[0]
+            if period is not None and f"{period}期" not in compact:
+                continue
+            return urljoin(dynamic_topic_index_url(site), str(link["href"]))
+    return min(eligible_links, key=lambda item: item[0])[1] if eligible_links else None
 
 
 def collect_dynamic_home_topic_documents(
@@ -82,29 +84,69 @@ def collect_dynamic_home_topic_documents(
             "主页找帖失败",
             f"{site.name} {page_label}未找到{period_text}标题包含{site.name}且包含绝杀一合的帖子链接",
         )
+    if urlparse(topic_url).netloc != urlparse(index_url).netloc:
+        raise SiteScrapeFailure("站点身份错误", f"{site.name} 目标帖子跨域: {topic_url}")
     return collect_documents(session, topic_url, timeout)
 
 
-def collect_liangjian_documents(session: requests.Session, url: str, timeout: int,
-                                period: int | None = None) -> list[str]:
+def collect_special_site_browser_documents(
+    browser: BrowserClient,
+    site: Site,
+    timeout: int,
+    period: int,
+) -> list[str] | None:
+    if site.site_id not in DYNAMIC_HOME_TOPIC_SITE_IDS:
+        return None
+
+    index_url = dynamic_topic_index_url(site)
+    index_documents = browser.get_documents(index_url, period, False, timeout)
+    topic_url = find_dynamic_home_topic_url(site, index_documents, period)
+    if topic_url is None:
+        page_label = "栏目页" if site.site_id in COLUMN_DYNAMIC_TOPIC_SITE_IDS else "主页"
+        raise SiteScrapeFailure(
+            "主页找帖失败",
+            f"{site.name} {page_label}未找到{period}期标题包含{site.name}且包含绝杀一合的帖子链接",
+        )
+    if urlparse(topic_url).netloc != urlparse(index_url).netloc:
+        raise SiteScrapeFailure("站点身份错误", f"{site.name} 目标帖子跨域: {topic_url}")
+    return browser.get_documents(topic_url, period, site.click_first, timeout)
+
+
+def collect_liangjian_documents(
+    session: requests.Session,
+    url: str,
+    timeout: int,
+    period: int | None = None,
+) -> list[str]:
     if "list.aspx" not in url.lower():
         return collect_documents(session, url, timeout)
-    links: set[str] = set()
+    article_urls: list[str] = []
+    expected_host = urlparse(url).netloc
     for document in collect_documents(session, url, timeout):
-        for link in BeautifulSoup(document, "html.parser").find_all("a", href=True):
-            text = normalize_digit_text(normalize_text(link.get_text(" ", strip=True)))
-            if "绝杀一合" not in text:
-                continue
-            title_periods = [int(value) for value in re.findall(r"(?<!\d)(\d{1,4})\s*期", text)]
-            if period is not None and title_periods and period not in title_periods:
-                continue
-            links.add(same_origin_url(url, str(link["href"])))
-    if len(links) != 1:
-        category = "候选冲突" if links else "主页找帖失败"
-        raise SiteScrapeFailure(category, f"亮劍 列表目标文章不唯一，数量={len(links)}")
-    # Some verified lists have no issue in the title; uniqueness plus the
-    # dedicated detail parser still must prove the requested issue at its edge.
-    return collect_documents(session, links.pop(), timeout)
+        soup = BeautifulSoup(document, "html.parser")
+        for link in soup.find_all("a", href=True):
+            link_text = normalize_digit_text(normalize_text(link.get_text(" ", strip=True)))
+            if "绝杀一合" in link_text and (
+                period is None or re.search(rf"(?<!\d){period}\s*期", link_text)
+            ):
+                article_url = urljoin(url, str(link["href"]))
+                if urlparse(article_url).netloc != expected_host:
+                    raise SiteScrapeFailure("站点身份错误", f"亮劍 目标文章跨域: {article_url}")
+                if article_url not in article_urls:
+                    article_urls.append(article_url)
+    if len(article_urls) > 1:
+        period_text = f"{period}期" if period is not None else ""
+        raise SiteScrapeFailure(
+            "候选冲突",
+            f"亮劍 列表命中多个标题包含{period_text}绝杀一合的文章: {' / '.join(article_urls)}",
+        )
+    if article_urls:
+        return collect_documents(session, article_urls[0], timeout)
+    period_text = f"{period}期" if period is not None else ""
+    raise SiteScrapeFailure(
+        "主页找帖失败",
+        f"亮劍 列表未找到标题包含{period_text}绝杀一合的文章链接",
+    )
 
 
 def collect_ttss_list_article_documents(
@@ -130,7 +172,7 @@ def collect_ttss_list_article_documents(
                 f"{site.name} 列表页同一期同栏目命中多个目标文章: {' / '.join(article_links)}",
             )
         if article_links:
-            article_url = same_origin_url(page_url, article_links[0])
+            article_url = article_links[0]
             page_host = urlparse(page_url).netloc
             article_parts = urlparse(article_url)
             if article_parts.netloc != page_host:
@@ -170,6 +212,8 @@ def collect_ttss_list_article_documents(
         next_url = find_ttss_next_page_url(page_html, page_url)
         if next_url is None:
             break
+        if urlparse(next_url).netloc != urlparse(site.url).netloc:
+            raise SiteScrapeFailure("站点身份错误", f"{site.name} 下一页链接跨域: {next_url}")
         page_url = next_url
 
     period_text = f"{period}期" if period is not None else "目标期"
@@ -180,11 +224,11 @@ def collect_ttss_list_article_documents(
 
 
 def collect_yidianhong_documents(session: requests.Session, url: str, timeout: int) -> list[str]:
-    documents, page_html = collect_page_documents(session, url, timeout, allow_inline_decode=True)
-    url = str(getattr(page_html, "final_url", url))
+    documents, page_html = collect_page_documents(session, url, timeout, decode_inline=True)
+    expected_host = urlparse(url).netloc
     for script_url in SCRIPT_RE.findall(page_html):
-        full_url = same_origin_url(url, script_url)
-        if "/upload/script/" not in full_url:
+        full_url = urljoin(url, script_url)
+        if "/upload/script/" not in full_url or urlparse(full_url).netloc != expected_host:
             continue
         try:
             script_text = fetch_text(session, full_url, min(timeout, 8))
@@ -211,7 +255,7 @@ def collect_yidianhong_documents(session: requests.Session, url: str, timeout: i
                     fetch_kind="script-decoded",
                     document_type="decoded",
                     parent_url=url,
-                    authority_id=raw_authority,
+                    authority_id=f"script:{full_url}:decoded:{index}",
                     document_id=f"script:{full_url}:decoded:{index}",
                 )
                 for index, text in enumerate(decoded)
@@ -287,64 +331,22 @@ def forum_api_documents_from_json(api_text: str) -> list[str]:
     return [f"{payload.get('draw', '')}期:{payload.get('topic', '')}\n{payload.get('content', '')}"]
 
 
-def collect_forum_api_documents(session: requests.Session, url: str, timeout: int,
-                                *, site: Site | None = None,
-                                period: int | None = None) -> list[str]:
-    if site is None or period is None:
-        raise SiteScrapeFailure("记录字段不符", "论坛API采集必须提供站点身份和指定期数")
+def collect_forum_api_documents(session: requests.Session, url: str, timeout: int) -> list[str]:
     api_url = forum_api_url(url)
     if api_url is None:
-        raise SiteScrapeFailure("记录ID缺失", "forum api url not found")
-    try:
-        payload = json.loads(fetch_text(session, api_url, timeout))
-    except json.JSONDecodeError as exc:
-        raise SiteScrapeFailure("接口响应无效", "论坛API不是有效JSON") from exc
-    records = payload if isinstance(payload, list) else [payload]
-    if len(records) > 200:
-        raise SiteScrapeFailure("接口响应无效", "论坛API记录数量超过200条上限")
-    fragment = urlparse(url).fragment
-    user_match = re.search(r"(?:^|/)users/(\d+)(?:$|[/?#])", fragment)
-    forum_match = re.search(r"(?:^|/)forums/(\d+)(?:$|[/?#])", fragment)
-    matches: list[SourceDocument] = []
-    for record in records:
-        if not isinstance(record, dict):
-            continue
-        topic = str(record.get("topic", ""))
-        if not has_kill_sum_keyword(topic):
-            continue
-        draw = str(record.get("draw", ""))
-        if not draw.isdigit() or int(draw) != period:
-            continue
-        raw_id = record.get("id", record.get("_id"))
-        if type(raw_id) not in {str, int} or not str(raw_id).strip():
-            raise SiteScrapeFailure("记录ID缺失", "论坛目标对象没有可验证的帖子ID")
-        record_id = str(raw_id).strip()
-        if forum_match and record_id != forum_match.group(1):
-            raise SiteScrapeFailure("记录ID不一致", "论坛API帖子ID与URL不一致")
-        user = record.get("user") if isinstance(record.get("user"), dict) else {}
-        owner_ids = {str(value) for value in
-                     [record.get("user_id"), record.get("userId"), user.get("id")]
-                     if value is not None}
-        author = normalize_text(str(record.get("authorNickname") or user.get("nickname") or ""))
-        if user_match:
-            if owner_ids and owner_ids != {user_match.group(1)}:
-                raise SiteScrapeFailure("记录字段不符", "论坛目标帖所属用户与URL不一致")
-            if not owner_ids and author != site.name:
-                raise SiteScrapeFailure("记录字段不符", "论坛目标帖缺少可核验作者身份")
-        if author and author != site.name:
-            raise SiteScrapeFailure("记录字段不符", f"论坛目标作者不是{site.name}")
-        content = record.get("content")
-        if not isinstance(content, str) or not content.strip():
-            raise SiteScrapeFailure("接口字段无效", "论坛目标记录正文为空")
-        text = forum_api_documents_from_json(json.dumps(record, ensure_ascii=False))[0]
-        matches.append(SourceDocument(text, source_url=api_url, fetch_kind="api",
-            document_type="json-record", parent_url=url, record_id=record_id,
-            authority_id=f"api:{api_url}:record:{record_id}",
-            document_id=f"api:{api_url}:record:{record_id}"))
-    if len(matches) != 1:
-        category = "候选冲突" if matches else "无当期"
-        raise SiteScrapeFailure(category, f"论坛{period}期同作者目标记录数量={len(matches)}，必须唯一")
-    return matches
+        raise RuntimeError("forum api url not found")
+    return [
+        SourceDocument(
+            document,
+            source_url=api_url,
+            fetch_kind="api",
+            document_type="json-record",
+            parent_url=url,
+            authority_id=f"api:{api_url}:record:{index}",
+            document_id=f"api:{api_url}:record:{index}",
+        )
+        for index, document in enumerate(forum_api_documents_from_json(fetch_text(session, api_url, timeout)))
+    ]
 
 
 def collect_manager_documents(session: requests.Session, site: Site, timeout: int) -> list[str]:
@@ -370,9 +372,42 @@ def collect_manager_documents(session: requests.Session, site: Site, timeout: in
     ]
 
 
+def collect_article_content_documents(
+    session: requests.Session, site: Site, timeout: int
+) -> list[str]:
+    rule = article_content_rule(site.site_id)
+    parsed = urlparse(site.url)
+    match = re.fullmatch(
+        r"/Article/ar_content/id/(\d+)/tid/(\d+)\.html",
+        parsed.path,
+        re.I,
+    )
+    if rule is None or match is None or match.groups() != (rule.article_id, rule.tid):
+        raise SiteScrapeFailure(
+            "记录ID不一致",
+            f"{site.name} URL未锁定唯一Article/ar_content记录ID: {site.url}",
+        )
+    document = fetch_text(session, site.url, timeout)
+    authority = f"article-content:{rule.article_id}:{rule.tid}"
+    return [
+        SourceDocument(
+            document,
+            source_url=site.url,
+            fetch_kind="http",
+            document_type="html",
+            parent_url=site.url,
+            record_id=f"{rule.article_id}:{rule.tid}",
+            authority_id=authority,
+            document_id=f"{authority}:html",
+        )
+    ]
+
+
 def collect_special_site_documents(
     session: requests.Session, site: Site, timeout: int, period: int | None = None
 ) -> list[str] | None:
+    if site.site_id in ARTICLE_CONTENT_SITE_IDS:
+        return collect_article_content_documents(session, site, timeout)
     if site.site_id == YIAIZHIMING_SITE_ID:
         return collect_manager_documents(session, site, timeout)
     if site.site_id in TTSS_SITE_IDS:
@@ -384,12 +419,12 @@ def collect_special_site_documents(
     if site.site_id == "s070_topic_246762" and not site.browser:
         return collect_yidianhong_documents(session, site.url, timeout)
     if forum_api_url(site.url) is not None:
-        return collect_forum_api_documents(session, site.url, timeout, site=site, period=period)
+        return collect_forum_api_documents(session, site.url, timeout)
     return None
 
 
 def requires_browser(site: Site) -> bool:
-    """Known API/list collectors do not need a driver even in legacy browser configs."""
+    """Use HTTP for collectors that already provide a complete source record."""
     if not site.browser:
         return False
     http_sources = TTSS_SITE_IDS | DYNAMIC_HOME_TOPIC_SITE_IDS | {

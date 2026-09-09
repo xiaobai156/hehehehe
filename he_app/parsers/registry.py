@@ -17,6 +17,7 @@ from he_app.parsers.dedicated.history import (
     find_anchor_latest_candidate,
     find_batch_new_site_kill_sum_candidate,
     find_baxianguohai_kill_sum_candidate,
+    find_change_archive_kill_sum_candidate,
     find_chunfenghuayu_kill_sum_candidate,
     find_directional_cycle_kill_sum_candidate,
     find_huluntunzao_kill_sum_candidate,
@@ -34,6 +35,14 @@ from he_app.parsers.dedicated.history import (
     find_yizhiluanuyan_kill_sum_candidate,
     find_youzuichunshe_kill_sum_candidate,
 )
+from he_app.parsers.dedicated.gucheng import (
+    GUCHENG_SITE_ID,
+    find_gucheng_kill_sum_candidate_with_direction,
+)
+from he_app.parsers.dedicated.article_content import (
+    ARTICLE_CONTENT_SITE_IDS,
+    find_article_content_candidate_with_direction,
+)
 from he_app.parsers.dedicated.structured import (
     DAJIAFA_SITE_ID,
     YIAIZHIMING_SITE_ID,
@@ -43,6 +52,10 @@ from he_app.parsers.dedicated.structured import (
 from he_app.parsers.dedicated.kaijiangfacai import (
     KAIJIANGFACAI_SITE_ID,
     find_kaijiangfacai_kill_sum_candidate_with_direction,
+)
+from he_app.parsers.dedicated.blackpepper import (
+    BLACKPEPPER_SITE_ID,
+    find_blackpepper_candidate_with_direction,
 )
 from he_app.parsers.dedicated.tables import (
     find_jiuxiao_kill_sum_candidate_with_direction,
@@ -209,6 +222,17 @@ def _parse_kaijiangfacai(site: Site, period: int, documents: list[str]) -> Evalu
     )
 
 
+def _parse_blackpepper(site: Site, period: int, documents: list[str]) -> Evaluation:
+    candidate, outside_direction = find_blackpepper_candidate_with_direction(
+        site, documents, period, site.pick
+    )
+    if candidate is not None:
+        return _success(site, period, candidate)
+    if outside_direction:
+        return None, f"{site.name} {period}期不是顶部专属历史第一条有效行", [], "方向范围外"
+    return _missing(site, period, "{site} 专属topic 805245里没找到{period}期绝杀合数", "无当期")
+
+
 def _parse_required(
     finder: Callable[[list[str], int, str], Candidate | None],
     detail: str,
@@ -299,6 +323,48 @@ def _parse_batch_author(site: Site, period: int, documents: list[str]) -> Evalua
     )
 
 
+def _parse_gucheng(site: Site, period: int, documents: list[str]) -> Evaluation:
+    candidate, outside_direction = find_gucheng_kill_sum_candidate_with_direction(
+        site, documents, period, normalize_pick(site.pick)
+    )
+    if candidate is not None:
+        return _success(site, period, candidate)
+    if outside_direction:
+        return (
+            None,
+            f"{site.name} {period}期不是尾部专属杀2合数边界行",
+            [],
+            "方向范围外",
+        )
+    return _missing(
+        site,
+        period,
+        "{site} 作者故城笙声的杀2合数专属块里没找到{period}期合数",
+        "无当期",
+    )
+
+
+def _parse_article_content(site: Site, period: int, documents: list[str]) -> Evaluation:
+    candidate, outside_direction = find_article_content_candidate_with_direction(
+        site, documents, period, normalize_pick(site.pick)
+    )
+    if candidate is not None:
+        return _success(site, period, candidate)
+    if outside_direction:
+        return (
+            None,
+            f"{site.name} {period}期不是顶部文章专属块第一条有效候选",
+            [],
+            "方向范围外",
+        )
+    return _missing(
+        site,
+        period,
+        "{site} Article/ar_content专属文章块里没找到{period}期合数",
+        "无当期",
+    )
+
+
 def _parse_toutianhuanri(site: Site, period: int, documents: list[str]) -> Evaluation:
     candidate, outside_direction = find_toutianhuanri_kill_sum_candidate_with_direction(
         documents, period, normalize_pick(site.pick)
@@ -337,12 +403,32 @@ def _parse_saima(site: Site, period: int, documents: list[str]) -> Evaluation:
     return _missing(site, period, "{site} 特殊历史归档块里没找到{period}期绝杀一合", "无当期")
 
 
+def _parse_change(site: Site, period: int, documents: list[str]) -> Evaluation:
+    candidate, outside_direction, found_archive = find_change_archive_kill_sum_candidate(
+        documents, period, normalize_pick(site.pick)
+    )
+    if candidate is not None:
+        return _success(site, period, candidate)
+    if outside_direction:
+        return (
+            None,
+            f"{site.name} {period}期不是{directional_three_label(site.pick)}嫦娥彩报绝杀一合边界行",
+            [],
+            "方向范围外",
+        )
+    if not found_archive:
+        return None, f"{site.name} 没找到嫦娥彩报绝杀一合同区块", [], "锚点缺失"
+    return _missing(site, period, "{site} 嫦娥彩报绝杀一合区块里没找到{period}期", "无当期")
+
+
 def _parse_generic(site: Site, period: int, documents: list[str]) -> Evaluation:
     rule = site_rule(site)
     pick = normalize_pick(site.pick)
+    value_count = site.value_count
     candidate, anchor_category, anchor_reason = find_anchor_latest_candidate(site, documents, period)
     if anchor_category is not None:
-        return None, anchor_reason or "", [], anchor_category
+        category = "方向范围外" if anchor_category == "超出范围" else anchor_category
+        return None, anchor_reason or "", [], category
 
     if candidate is None:
         candidate, conflict_values, conflict_lines = trusted_candidate_with_conflict(
@@ -351,6 +437,7 @@ def _parse_generic(site: Site, period: int, documents: list[str]) -> Evaluation:
             pick,
             require_body_locator=rule.require_body_locator,
             allow_weak=rule.allow_weak_kill_sum_keyword,
+            value_count=value_count,
         )
         if conflict_values:
             return None, (
@@ -364,20 +451,27 @@ def _parse_generic(site: Site, period: int, documents: list[str]) -> Evaluation:
             pick,
             rule.require_body_locator,
             rule.allow_weak_kill_sum_keyword,
+            value_count,
         ):
             return None, (
                 f"{pick_region_label(site.pick)}的{period}期严格候选不在"
                 f"{directional_three_label(pick)}高可信候选边界"
             ), [], "超出范围"
         category, reason = analyze_missing_reason(
-            documents, period, pick, rule.allow_weak_kill_sum_keyword
+            documents, period, pick, rule.allow_weak_kill_sum_keyword, value_count
         )
         return None, reason, [], category
 
     rank_values = candidate.values.split(",")
-    if len(rank_values) != 1 or not is_valid_success_value(rank_values[0]):
+    if len(rank_values) != value_count or not all(is_valid_success_value(value) for value in rank_values):
         return None, f"{candidate.line} 提取值不在01-13合范围", [], "数据不完整"
     return _success(site, period, candidate)
+
+
+def _parse_two_value_anchor(site: Site, period: int, documents: list[str]) -> Evaluation:
+    """Dedicated registry binding for explicitly configured two-sum sites."""
+
+    return _parse_generic(site, period, documents)
 
 
 def build_registry() -> ParserRegistry:
@@ -393,6 +487,7 @@ def build_registry() -> ParserRegistry:
         "s073_shuqhbq": _parse_jiuxiao,
         "s085_kcvpleh": _parse_woman_flavor,
         KAIJIANGFACAI_SITE_ID: _parse_kaijiangfacai,
+        BLACKPEPPER_SITE_ID: _parse_blackpepper,
         "s013_topic_226261": _parse_yingba,
         "s057_topic_227386": _parse_shushen,
         "s071_topic_768615": _parse_munan,
@@ -437,10 +532,17 @@ def build_registry() -> ParserRegistry:
             "{site} 作者块里没找到{period}期绝杀一合",
         ),
         "s060_topic_589491": _parse_saima,
+        "s087_enpcjg": _parse_change,
         TTSS_YIKAO_SITE_ID: _parse_ttss,
         TTSS_CHENYUAN_SITE_ID: _parse_ttss,
         TTSS_QIFENG_SITE_ID: _parse_ttss,
+        "s135_topic_481646": _parse_two_value_anchor,
+        "s136_topic_677676": _parse_two_value_anchor,
+        "s137_topic_682109": _parse_two_value_anchor,
+        GUCHENG_SITE_ID: _parse_gucheng,
     }
+    for site_id in ARTICLE_CONTENT_SITE_IDS:
+        registrations[site_id] = _parse_article_content
     for site_id in ("s069_topic_682018", "s083_topic_242261"):
         registrations[site_id] = _parse_named_anchor
     for site_id in BATCH_NEW_DEDICATED_SITE_IDS:
@@ -461,15 +563,18 @@ WINDOW_PRECHECK_EXEMPT = {
     "s073_shuqhbq",
     "s085_kcvpleh",
     KAIJIANGFACAI_SITE_ID,
+    BLACKPEPPER_SITE_ID,
     "s070_topic_246762",
     "s029_topic_336887",
     "s099_topic_464275",
     "s060_topic_589491",
+    "s087_enpcjg",
     "s094_topic_727508",
     TTSS_YIKAO_SITE_ID,
     TTSS_CHENYUAN_SITE_ID,
     TTSS_QIFENG_SITE_ID,
 }
+WINDOW_PRECHECK_EXEMPT.update(ARTICLE_CONTENT_SITE_IDS)
 
 
 def evaluate_site_documents(site: Site, period: int, documents: list[str]) -> Evaluation:

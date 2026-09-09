@@ -1,42 +1,48 @@
 @echo off
 setlocal EnableExtensions
-chcp 65001 >nul
-cd /d "%~dp0"
-set "PY_EXE="
-set "PY_ARGS="
-if exist ".venv\Scripts\python.exe" set "PY_EXE=%CD%\.venv\Scripts\python.exe"
-if not defined PY_EXE (
-  py -3 --version >nul 2>nul
-  if not errorlevel 1 (
-    set "PY_EXE=py"
-    set "PY_ARGS=-3"
-  )
-)
-if not defined PY_EXE (
+
+set "PY_CMD="
+py -3 --version >nul 2>nul
+if not errorlevel 1 set "PY_CMD=py -3"
+
+if not defined PY_CMD (
   python --version >nul 2>nul
-  if not errorlevel 1 set "PY_EXE=python"
+  if not errorlevel 1 set "PY_CMD=python"
 )
-if not defined PY_EXE (
-  if exist "%LocalAppData%\Programs\Python\Python310\python.exe" set "PY_EXE=%LocalAppData%\Programs\Python\Python310\python.exe"
+
+if not defined PY_CMD (
+  if exist "%LocalAppData%\Programs\Python\Python310\python.exe" set "PY_CMD=%LocalAppData%\Programs\Python\Python310\python.exe"
 )
-if not defined PY_EXE (
-  echo Cannot find Python 3.10 or newer.
+
+if not defined PY_CMD (
+  echo Cannot find Python. Please install Python or add it to PATH.
   pause
   exit /b 1
 )
 
+title Kill-He Duplicate Checker
+cd /d "%~dp0"
+
 :input_period
 set "PERIOD="
+echo.
 set /p "PERIOD=Input period: "
-"%PY_EXE%" %PY_ARGS% -c "import os,sys; p=os.environ.get('PERIOD','').strip(); sys.exit(0 if p.isascii() and p.isdigit() and int(p)>0 else 2)"
-if errorlevel 1 (
-  echo Period must be a positive integer.
+set "PERIOD=%PERIOD: =%"
+if not defined PERIOD (
+  echo Period cannot be empty.
   goto input_period
 )
-echo Checking period-specific duplicates...
-"%PY_EXE%" %PY_ARGS% he_duplicate_checker.py --period "%PERIOD%" --workers 8
+for /f "delims=0123456789" %%A in ("%PERIOD%") do (
+  echo Period must be numbers only.
+  goto input_period
+)
+
+echo Checking duplicates...
+%PY_CMD% he_duplicate_checker.py --period %PERIOD% --workers 8
 set "EXIT_CODE=%ERRORLEVEL%"
+
 echo.
 echo Finished. Exit code: %EXIT_CODE%
+echo Check latest_results.txt.
 pause
 exit /b %EXIT_CODE%
