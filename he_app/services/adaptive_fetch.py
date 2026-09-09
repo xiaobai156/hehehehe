@@ -29,8 +29,12 @@ from he_app.services.single_period import evaluate_site_period
 # Keep the period, value-count and physical top/bottom edge checks unchanged.
 _RUNTIME_NO_LOCATOR_SITE_IDS = {
     "s003_topic_193293",
+    "s014_topic_242281",
     "s018_mm",
     "s048_979363",
+    "s067_topic_291095",
+    "s074_topic_250885",
+    "s075_topic_250874",
     "s086_aa_959787m_136",
 }
 for _site_id in _RUNTIME_NO_LOCATOR_SITE_IDS:
