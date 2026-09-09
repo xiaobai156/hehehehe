@@ -1,0 +1,57 @@
+name: Validate 252 repair branch
+
+on:
+  push:
+    branches:
+      - fix/252-failures-20260909
+    paths:
+      - .github/workflows/run-252-repair.yml
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      PYTHONUTF8: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      HE_NETWORK_POLICY: "strict"
+      HE_MAX_RESPONSE_BYTES: "8388608"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: python -m pip install -e ".[browser,test]"
+      - name: Run repaired 252 validation
+        shell: pwsh
+        run: |
+          python he_live_validator.py `
+            --cycle 2026 `
+            --period 252 `
+            --periods 10 `
+            --workers 8 `
+            --timeout 20 `
+            --hard-timeout 90 `
+            --output-dir live-validation
+      - name: Print comparison summary
+        shell: pwsh
+        run: |
+          $report = Get-Content live-validation/live-validation.json -Raw -Encoding UTF8 | ConvertFrom-Json
+          $failed = $report.site_count - $report.current_success_count
+          Write-Host "baseline_success=17 baseline_failed=108"
+          Write-Host "repaired_success=$($report.current_success_count) repaired_failed=$failed"
+          Write-Host "history_complete=$($report.history_complete_count) hard_timeouts=$($report.hard_timeout_count)"
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: period-252-repair-validation
+          path: live-validation
+          if-no-files-found: warn
+          retention-days: 7
