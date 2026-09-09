@@ -16,19 +16,18 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
-from zoneinfo import ZoneInfo
 
 from he_app.config.settings import SITES_FILE
 from he_app.config.sites import load_sites
 from he_app.domain.models import Site
-from he_app.domain.periods import PeriodKey, current_tokyo_period
+from he_app.domain.periods import PeriodKey, TOKYO_ZONE, current_tokyo_period
 from he_app.fetch.http import build_host_locks
 from he_app.services.document_sources import requires_browser
 from he_app.services.duplicate_check import Fingerprint, run_fingerprint_jobs
 from he_app.services.isolation import IsolatedJobResult
 from he_app.storage.atomic_write import commit_text_transaction
 
-TOKYO = ZoneInfo("Asia/Tokyo")
+TOKYO = TOKYO_ZONE
 DEFAULT_REPORT_DIR = "audit/live_validation"
 
 
@@ -171,9 +170,7 @@ def build_text_summary(report: dict) -> str:
         "",
     ]
     for row in report["results"]:
-        history = (
-            f"历史{row['consecutive_history_count']}/{row['history_count']}期"
-        )
+        history = f"历史{row['consecutive_history_count']}/{row['history_count']}期"
         elapsed = (
             f"{row['elapsed_seconds']:.3f}s"
             if isinstance(row["elapsed_seconds"], (int, float))
