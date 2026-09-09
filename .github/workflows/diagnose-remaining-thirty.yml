@@ -1,0 +1,155 @@
+name: Diagnose remaining thirty strict edge failures
+
+on:
+  push:
+    branches:
+      - fix-remaining-thirty-252-20260910
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      PYTHONUTF8: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      HE_NETWORK_POLICY: strict
+      HE_MAX_RESPONSE_BYTES: '8388608'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install
+        run: python -m pip install -e ".[browser,test]"
+      - name: Build remaining site subset
+        shell: pwsh
+        run: |
+          @'
+          import json
+          from pathlib import Path
+          names = {
+              '电子排版','朝三暮四','达罗环宇','无適无莫','阳光明媚','错过中原','踏雪无痕网',
+              '伤心人家','残丝断魂','作舍道旁','稳打稳中','通天','春风化雨','兴高采烈','叹为观止',
+              '追根查源','嫦娥奔月','东益散人','没名字一','丰墙硗下','怒气冲冲','挂牌','没名字五',
+              '和风细雨','新人旧梦','流浪高手','雷锋第一版','没名字二','号令如山','亡羊补牢'
+          }
+          data = json.loads(Path('sites.json').read_text(encoding='utf-8'))
+          subset = [item for item in data if item['name'] in names]
+          missing = sorted(names - {item['name'] for item in subset})
+          if missing or len(subset) != 30:
+              raise SystemExit(f'subset mismatch count={len(subset)} missing={missing}')
+          Path('remaining30.json').write_text(json.dumps(subset, ensure_ascii=False, indent=2), encoding='utf-8')
+          for item in subset:
+              print(f"{item['name']}\t{item['id']}\t{item['pick']}\t{item['url']}")
+          '@ | python -
+      - name: Run current production subset
+        shell: pwsh
+        run: |
+          python he_crawler.py `
+            --period 252 `
+            --sites remaining30.json `
+            --workers 6 `
+            --timeout 20 `
+            --hard-timeout 90 `
+            --browser-hard-timeout 130 `
+            --success remaining30-success.txt `
+            --fail remaining30-fail.txt `
+            --no-fingerprint-cache-sync
+          Write-Host '===== FAIL FILE ====='
+          if (Test-Path remaining30-fail.txt) { Get-Content remaining30-fail.txt -Encoding UTF8 }
+      - name: Inspect raw 252 and 253 boundary evidence
+        shell: pwsh
+        run: |
+          @'
+          import json, re, traceback
+          from pathlib import Path
+          from bs4 import BeautifulSoup
+          from he_app.domain.models import Site
+          from he_app.fetch.http import create_session, build_host_locks
+          from he_app.fetch.browser import BrowserClient, close_browser_safely
+          from he_app.services.adaptive_fetch import collect_http_documents, collect_special_documents
+          from he_app.services.browser_policy import runtime_requires_browser, runtime_click_first
+          from he_app.services.document_sources import requires_browser
+          from he_app.services.single_period import evaluate_site_period
+
+          cfg = json.loads(Path('remaining30.json').read_text(encoding='utf-8'))
+          host_locks = build_host_locks([Site.from_mapping(item) for item in cfg])
+
+          def norm_text(doc):
+              soup = BeautifulSoup(str(doc), 'html.parser')
+              return soup.get_text('\n', strip=True) or str(doc)
+
+          def excerpts(text):
+              lines = [re.sub(r'\s+', ' ', x).strip() for x in text.splitlines() if x.strip()]
+              hits=[]
+              for i,line in enumerate(lines):
+                  if re.search(r'(?<!\d)(?:252|253)\s*期', line):
+                      lo=max(0,i-2); hi=min(len(lines),i+3)
+                      hits.append(' || '.join(lines[lo:hi])[:1200])
+              uniq=[]
+              for h in hits:
+                  if h not in uniq: uniq.append(h)
+              return uniq[:8]
+
+          for item in cfg:
+              site = Site.from_mapping(item)
+              print('\n' + '='*90)
+              print(f'SITE {site.name} id={site.site_id} pick={site.pick} browser={runtime_requires_browser(site, requires_browser)}')
+              docs=[]
+              browser=None
+              with create_session(host_locks) as session:
+                  try:
+                      special = collect_special_documents(session, site, 20, 252)
+                      if special is not None:
+                          docs = list(special)
+                          print(f'SPECIAL_DOCS={len(docs)}')
+                  except Exception as exc:
+                      print(f'SPECIAL_ERR={type(exc).__name__}: {exc}')
+                  if not docs:
+                      try:
+                          docs = list(collect_http_documents(session, site, 20))
+                          print(f'HTTP_DOCS={len(docs)}')
+                      except Exception as exc:
+                          print(f'HTTP_ERR={type(exc).__name__}: {exc}')
+                  need_browser = runtime_requires_browser(site, requires_browser)
+                  if need_browser:
+                      try:
+                          browser = BrowserClient(headless=True)
+                          browser.start()
+                          bdocs = browser.get_documents(site.url, 252, runtime_click_first(site), 20)
+                          if bdocs:
+                              docs = list(bdocs)
+                              print(f'BROWSER_DOCS={len(docs)}')
+                      except Exception as exc:
+                          print(f'BROWSER_ERR={type(exc).__name__}: {exc}')
+                      finally:
+                          if browser is not None:
+                              close_browser_safely(browser)
+              for period in (252,253):
+                  try:
+                      result = evaluate_site_period(site, period, docs) if docs else (None,'no docs',[],None)
+                      print(f'EVAL_{period}={result}')
+                  except Exception as exc:
+                      print(f'EVAL_{period}_ERR={type(exc).__name__}: {exc}')
+              for idx,doc in enumerate(docs[:3]):
+                  text=norm_text(doc)
+                  print(f'DOC[{idx}] source={getattr(doc,"source_url","")} kind={getattr(doc,"fetch_kind","")} chars={len(text)}')
+                  ex=excerpts(text)
+                  if not ex:
+                      print('  NO_252_253_EXCERPT')
+                  for n,h in enumerate(ex,1):
+                      print(f'  EX{n}: {h}')
+          '@ | python -
+      - uses: actions/upload-artifact@v4
+        with:
+          name: remaining-thirty-diagnostic
+          path: |
+            remaining30.json
+            remaining30-success.txt
+            remaining30-fail.txt
+          retention-days: 7
