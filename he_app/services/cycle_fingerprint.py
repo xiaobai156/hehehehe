@@ -20,7 +20,7 @@ from he_app.parsers.dedicated.structured import DAJIAFA_SITE_ID, YIAIZHIMING_SIT
 from he_app.parsers.dedicated.tables import site_rule
 from he_app.parsers.dedicated.ttss import TTSS_SITE_IDS
 from he_app.parsers.registry import REGISTRY
-from he_app.services.fingerprint import _strict_bulk_values
+from he_app.services.fingerprint import build_site_period_fingerprint
 from he_app.services.single_period import parse_site_period
 from he_app.validation.period import is_valid_sum_value
 
@@ -103,7 +103,7 @@ def _matching_authority_documents(
     ]
     if matching:
         return matching
-    # Legacy fixture documents have no source metadata.  They remain isolated
+    # Legacy fixture documents have no source metadata. They remain isolated
     # by the caller and are never combined with a live physical authority.
     return documents[:1] if documents else []
 
@@ -241,8 +241,18 @@ def build_cycle_site_fingerprint(
         raise ValueError(f"invalid current value count for {site.site_id}: {current_value}")
 
     same_authority = _matching_authority_documents(documents, parsed.evidence)
-    dedicated = _strict_bulk_values(site, same_authority or documents)
-    generic = _generic_verified_history(site, same_authority or documents, parsed.evidence)
+    selected_documents = same_authority or documents
+    # Reuse the current strict, same-record history implementation instead of
+    # the removed pre-merge _strict_bulk_values helper. This preserves the
+    # top/bottom baseline and never broadens source authority.
+    dedicated_periods = build_site_period_fingerprint(
+        site,
+        selected_documents,
+        context.current,
+        context.periods,
+    )
+    dedicated = {key.number: value for key, value in dedicated_periods.items()}
+    generic = _generic_verified_history(site, selected_documents, parsed.evidence)
     numeric_history, conflicts = _merge_numeric_history((dedicated, generic))
     if context.current.number in conflicts:
         raise ValueError(
