@@ -1,0 +1,86 @@
+name: Baseline live validation
+
+on:
+  push:
+    branches:
+      - fix/production-completion-20260909
+    paths:
+      - .github/workflows/baseline-live.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUTF8: '1'
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install
+        run: python -m pip install -e '.[browser,test]'
+      - name: Validate all configured sites without writing production data
+        shell: bash
+        run: |
+          mkdir -p live-baseline
+          python - <<'PY'
+          import json
+          from datetime import datetime
+          from pathlib import Path
+          from zoneinfo import ZoneInfo
+
+          from he_app.config.sites import load_sites
+          from he_app.fetch.http import build_host_locks
+          from he_app.services.duplicate_check import run_fingerprint_jobs
+
+          now = datetime.now(ZoneInfo('Asia/Tokyo'))
+          period = now.timetuple().tm_yday
+          sites = load_sites(Path('sites.json'))
+          fingerprints, errors = run_fingerprint_jobs(
+              list(enumerate(sites)), sites, workers=12, period=period, periods=10,
+              timeout=15, show_browser=False, host_locks=build_host_locks(sites, {}),
+              hard_timeout=45.0, poll_interval=0.25,
+          )
+          payload = {
+              'cycle_year': now.year,
+              'period': period,
+              'site_count': len(sites),
+              'current_success_count': len(fingerprints),
+              'history_ge_6_count': sum(len(value) >= 6 for value in fingerprints.values()),
+              'results': [
+                  {
+                      'index': index,
+                      'id': site.site_id,
+                      'name': site.name,
+                      'url': site.url,
+                      'pick': site.pick,
+                      'browser': site.browser,
+                      'fingerprint': {str(key): value for key, value in sorted(fingerprints.get(index, {}).items(), reverse=True)},
+                      'history_count': len(fingerprints.get(index, {})),
+                      'error': errors.get(index),
+                  }
+                  for index, site in enumerate(sites)
+              ],
+          }
+          Path('live-baseline/report.json').write_text(json.dumps(payload, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+          Path('live-baseline/summary.txt').write_text(
+              f"cycle={now.year} period={period} sites={len(sites)} current_success={len(fingerprints)} history_ge_6={payload['history_ge_6_count']} errors={len(errors)}\n",
+              encoding='utf-8',
+          )
+          print(Path('live-baseline/summary.txt').read_text(encoding='utf-8'))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: baseline-live-validation
+          path: live-baseline
+          retention-days: 3
