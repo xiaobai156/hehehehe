@@ -22,34 +22,25 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Verify and extract payload
+      - name: Verify and apply payload
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
-          import base64, hashlib, json, tarfile
+          import base64, gzip, hashlib, json
           from pathlib import Path
 
           root = Path('.completion_payload')
           manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
-          encoded = ''.join(
-              (root / part).read_text(encoding='ascii')
-              for part in manifest['parts']
-          )
+          encoded = ''.join((root / part).read_text(encoding='ascii') for part in manifest['parts'])
           archive = base64.b64decode(encoded, validate=True)
           actual = hashlib.sha256(archive).hexdigest()
           if actual != manifest['sha256']:
               raise SystemExit(f"payload hash mismatch: {actual}")
-          target = Path('/tmp/production-completion.tar.gz')
-          target.write_bytes(archive)
-          with tarfile.open(target, 'r:gz') as tar:
-              root_path = Path.cwd().resolve()
-              for member in tar.getmembers():
-                  destination = (root_path / member.name).resolve()
-                  if root_path not in destination.parents and destination != root_path:
-                      raise SystemExit(f"unsafe payload path: {member.name}")
-              tar.extractall('.')
+          Path('/tmp/production-completion.patch').write_bytes(gzip.decompress(archive))
           PY
+          git apply --check /tmp/production-completion.patch
+          git apply /tmp/production-completion.patch
           rm -rf .completion_payload
       - name: Install and verify
         run: |
