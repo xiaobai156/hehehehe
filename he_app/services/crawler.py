@@ -6,11 +6,12 @@ from he_app.domain.errors import SiteScrapeFailure
 from he_app.domain.models import Site
 from he_app.fetch.browser import BrowserClient, BrowserPool
 from he_app.fetch.http import create_session
-from he_app.services.adaptive_fetch import collect_http_documents, try_http_current
-from he_app.services.document_sources import (
-    collect_special_site_documents,
-    requires_browser,
+from he_app.services.adaptive_fetch import (
+    collect_http_documents,
+    collect_special_documents,
+    try_http_current,
 )
+from he_app.services.document_sources import requires_browser
 from he_app.services.single_period import evaluate_site_period
 
 
@@ -35,7 +36,7 @@ def scrape_site(
     browser: BrowserClient | None = None,
 ) -> tuple[str | None, str, list[str], str | None]:
     try:
-        documents = collect_special_site_documents(session, site, timeout, period)
+        documents = collect_special_documents(session, site, timeout, period)
     except SiteScrapeFailure as exc:
         return None, exc.reason, [], exc.category
     if documents is not None:
@@ -43,8 +44,8 @@ def scrape_site(
 
     if site.browser:
         # A browser flag means browser is allowed/needed as fallback, not that
-        # a heavyweight driver must be the first transport.  Accept HTTP only
-        # after the same strict parser proves exact period + direction.
+        # a heavyweight driver must be the first transport. Accept HTTP only
+        # after the unchanged strict parser proves exact period + direction.
         try:
             probed = try_http_current(session, site, period, min(timeout, 8))
         except Exception:
@@ -69,7 +70,7 @@ def scrape_site_with_browser(
     session: requests.Session, site: Site, period: int, timeout: int, browser: BrowserClient
 ) -> tuple[str | None, str, list[str], str | None]:
     try:
-        documents = collect_special_site_documents(session, site, timeout, period)
+        documents = collect_special_documents(session, site, timeout, period)
     except SiteScrapeFailure as exc:
         return None, exc.reason, [], exc.category
     if documents is not None:
