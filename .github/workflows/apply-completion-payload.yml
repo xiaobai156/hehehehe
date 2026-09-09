@@ -32,16 +32,21 @@ jobs:
 
           root = Path('.completion_payload')
           manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
-          archive = base64.b64decode((root / manifest['payload']).read_text(encoding='ascii'), validate=True)
+          encoded = ''.join(
+              (root / part).read_text(encoding='ascii')
+              for part in manifest['parts']
+          )
+          archive = base64.b64decode(encoded, validate=True)
           actual = hashlib.sha256(archive).hexdigest()
           if actual != manifest['sha256']:
               raise SystemExit(f"payload hash mismatch: {actual}")
           target = Path('/tmp/production-completion.tar.gz')
           target.write_bytes(archive)
           with tarfile.open(target, 'r:gz') as tar:
+              root_path = Path.cwd().resolve()
               for member in tar.getmembers():
-                  destination = (Path.cwd() / member.name).resolve()
-                  if Path.cwd().resolve() not in destination.parents and destination != Path.cwd().resolve():
+                  destination = (root_path / member.name).resolve()
+                  if root_path not in destination.parents and destination != root_path:
                       raise SystemExit(f"unsafe payload path: {member.name}")
               tar.extractall('.')
           PY
