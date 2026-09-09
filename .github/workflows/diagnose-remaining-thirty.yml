@@ -66,10 +66,10 @@ jobs:
         shell: pwsh
         run: |
           @'
-          import json, re, traceback
+          import re
           from pathlib import Path
           from bs4 import BeautifulSoup
-          from he_app.domain.models import Site
+          from he_app.config.sites import load_sites
           from he_app.fetch.http import create_session, build_host_locks
           from he_app.fetch.browser import BrowserClient, close_browser_safely
           from he_app.services.adaptive_fetch import collect_http_documents, collect_special_documents
@@ -77,8 +77,8 @@ jobs:
           from he_app.services.document_sources import requires_browser
           from he_app.services.single_period import evaluate_site_period
 
-          cfg = json.loads(Path('remaining30.json').read_text(encoding='utf-8'))
-          host_locks = build_host_locks([Site.from_mapping(item) for item in cfg])
+          sites = load_sites(Path('remaining30.json'))
+          host_locks = build_host_locks(sites)
 
           def norm_text(doc):
               soup = BeautifulSoup(str(doc), 'html.parser')
@@ -94,17 +94,16 @@ jobs:
               uniq=[]
               for h in hits:
                   if h not in uniq: uniq.append(h)
-              return uniq[:8]
+              return uniq[:10]
 
-          for item in cfg:
-              site = Site.from_mapping(item)
+          for site in sites:
               print('\n' + '='*90)
               print(f'SITE {site.name} id={site.site_id} pick={site.pick} browser={runtime_requires_browser(site, requires_browser)}')
               docs=[]
               browser=None
               with create_session(host_locks) as session:
                   try:
-                      special = collect_special_documents(session, site, 20, 252)
+                      special = collect_special_documents(session, site, 30, 252)
                       if special is not None:
                           docs = list(special)
                           print(f'SPECIAL_DOCS={len(docs)}')
@@ -112,16 +111,15 @@ jobs:
                       print(f'SPECIAL_ERR={type(exc).__name__}: {exc}')
                   if not docs:
                       try:
-                          docs = list(collect_http_documents(session, site, 20))
+                          docs = list(collect_http_documents(session, site, 30))
                           print(f'HTTP_DOCS={len(docs)}')
                       except Exception as exc:
                           print(f'HTTP_ERR={type(exc).__name__}: {exc}')
-                  need_browser = runtime_requires_browser(site, requires_browser)
-                  if need_browser:
+                  if runtime_requires_browser(site, requires_browser):
                       try:
                           browser = BrowserClient(headless=True)
                           browser.start()
-                          bdocs = browser.get_documents(site.url, 252, runtime_click_first(site), 20)
+                          bdocs = browser.get_documents(site.url, 252, runtime_click_first(site), 30)
                           if bdocs:
                               docs = list(bdocs)
                               print(f'BROWSER_DOCS={len(docs)}')
@@ -146,6 +144,7 @@ jobs:
                       print(f'  EX{n}: {h}')
           '@ | python -
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: remaining-thirty-diagnostic
           path: |
