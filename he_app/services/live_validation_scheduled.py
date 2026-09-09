@@ -63,7 +63,7 @@ def _run_group(
 
     return run_isolated_jobs(
         jobs,
-        worker_path="he_app.services.live_validation_adaptive:validate_live_site",
+        worker_path="he_app.services.live_validation_adaptive_v2:validate_live_site",
         max_workers=max(1, max_workers),
         hard_timeout=hard_timeout,
         poll_interval=0.1,
@@ -84,9 +84,9 @@ def run_live_validation(
 ):
     """Validate all sites while preventing browser overcommit.
 
-    HTTP/API/list sites retain the requested worker count.  Sites that may
+    HTTP/API/list sites retain the requested worker count. Sites that may
     launch Selenium are isolated into a second pool capped at three workers,
-    matching the production browser pool ceiling.  Each site still has its own
+    matching the production browser pool ceiling. Each site still has its own
     hard deadline and unchanged strict parsing/period/direction rules.
     """
 
