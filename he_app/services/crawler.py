@@ -129,15 +129,10 @@ def _scrape_exact_site(
                 return evaluate_site_period(site, period, rendered)
         return evaluation
 
-    if browser_required:
-        if browser is None:
-            if special_failure is not None:
-                return None, special_failure.reason, [], special_failure.category
-            raise RuntimeError("browser client is required")
-
+    if browser_required and browser is not None:
         # Browser-capable sites still probe HTTP first unless their dedicated
         # HTTP collector already proved that the page shell cannot locate the
-        # target.  HTTP is accepted only after the unchanged strict parser
+        # target. HTTP is accepted only after the unchanged strict parser
         # proves exact period + configured physical direction.
         if special_failure is None:
             try:
@@ -155,6 +150,10 @@ def _scrape_exact_site(
             timeout,
         )
     else:
+        # Direct library/offline callers may intentionally provide no browser.
+        # Keep strict HTTP evaluation available in that context. Production
+        # scheduling still routes runtime-required site IDs through the browser
+        # pool, so this does not disable the live stale-shell fallback.
         if special_failure is not None:
             return None, special_failure.reason, [], special_failure.category
         documents = collect_http_documents(session, site, timeout)
@@ -270,8 +269,8 @@ def scrape_browser_site(
             return result, detail, None, rank_values, previous_reason
         except Exception as exc:
             # Chrome occasionally reports a renderer IPC timeout on a healthy
-            # page.  Only this exact transport failure gets one clean-browser
-            # retry.  Parser/direction/identity failures are never retried or
+            # page. Only this exact transport failure gets one clean-browser
+            # retry. Parser/direction/identity failures are never retried or
             # relaxed, and partial DOM from the failed renderer is discarded.
             if attempt == 0 and _is_renderer_timeout(exc):
                 try:
