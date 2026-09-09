@@ -1,6 +1,6 @@
 name: Run 252 live validation
 
-# rerun after cycle/fingerprint compatibility repair
+# rerun after Windows tzdata compatibility repair
 on:
   push:
     branches:
