@@ -1,0 +1,145 @@
+name: Complete production validation and publish
+
+on:
+  push:
+    branches:
+      - fix/production-completion-20260909
+    paths:
+      - .github/workflows/complete-production-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  complete:
+    runs-on: windows-latest
+    timeout-minutes: 110
+    env:
+      PYTHONUTF8: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      HE_NETWORK_POLICY: "strict"
+      HE_MAX_RESPONSE_BYTES: "8388608"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Apply idempotent integration
+        run: python tools/apply_completion_integration.py
+      - name: Install
+        run: python -m pip install -e ".[browser,test]"
+      - name: Compile and import every production entry
+        run: |
+          python -m compileall -q he_app he_crawler.py he_multi_period_crawler.py he_duplicate_checker.py he_live_validator.py
+          python -c "import he_crawler, he_multi_period_crawler, he_duplicate_checker, he_live_validator"
+          python he_crawler.py --help
+          python he_duplicate_checker.py --help
+          python he_live_validator.py --help
+      - name: Static checks
+        run: python -m ruff check .
+      - name: Full offline regression suite
+        env:
+          HE_NETWORK_POLICY: "off"
+        run: python -m pytest -q -m "not browser"
+      - name: Save verified source changes on isolated branch
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add --all
+          git diff --cached --check
+          if (-not (git diff --cached --quiet)) {
+            git commit -m 'feat: complete cycle-aware validation and hard process isolation'
+            git push origin HEAD:fix/production-completion-20260909
+          }
+      - name: Resolve Tokyo cycle and period
+        id: target
+        shell: pwsh
+        run: |
+          $json = python -c "from datetime import datetime; from zoneinfo import ZoneInfo; import json; n=datetime.now(ZoneInfo('Asia/Tokyo')); print(json.dumps({'cycle':n.year,'period':n.timetuple().tm_yday}))"
+          $target = $json | ConvertFrom-Json
+          "cycle=$($target.cycle)" >> $env:GITHUB_OUTPUT
+          "period=$($target.period)" >> $env:GITHUB_OUTPUT
+          Write-Host "cycle=$($target.cycle) period=$($target.period)"
+      - name: Real 125-site validation with strict network policy
+        shell: pwsh
+        run: |
+          python he_live_validator.py `
+            --cycle '${{ steps.target.outputs.cycle }}' `
+            --period '${{ steps.target.outputs.period }}' `
+            --periods 10 `
+            --workers 8 `
+            --timeout 20 `
+            --hard-timeout 90 `
+            --output-dir live-validation
+      - name: Verify every configured site was actually attempted
+        shell: pwsh
+        run: |
+          python -c "import json; from pathlib import Path; p=json.loads(Path('live-validation/live-validation.json').read_text(encoding='utf-8')); assert p['site_count']==125, p['site_count']; assert p['attempted_count']==p['site_count'], (p['attempted_count'],p['site_count']); assert len(p['results'])==p['site_count']; assert len({x['site_id'] for x in p['results']})==p['site_count']"
+      - name: Write auditable completion status
+        shell: pwsh
+        run: |
+          @'
+          import json
+          import os
+          from pathlib import Path
+          report = json.loads(Path('live-validation/live-validation.json').read_text(encoding='utf-8'))
+          categories = ', '.join(f"{key}={value}" for key, value in sorted(report['categories'].items()))
+          text = f"""# 生产补全状态
+
+          - GitHub Actions 运行：`{os.environ['GITHUB_RUN_ID']}`
+          - 验收提交：`{os.environ['GITHUB_SHA']}`
+          - 目标周期/期数：`{report['period_key']}`
+          - 配置站点：`{report['site_count']}`
+          - 已真实尝试：`{report['attempted_count']}`
+          - 当期严格验证成功：`{report['current_success_count']}`
+          - 具备完整 {report['history_required']} 期历史：`{report['history_complete_count']}`
+          - 硬超时：`{report['hard_timeout_count']}`
+          - 分类：`{categories}`
+
+          本文件证明该次运行完整尝试了配置中的全部站点。外部不可达、证书错误、当期未发布或历史不足仍按真实失败保留在 Actions 的 `full-production-live-validation` 工件中，不得伪造为成功。
+          """
+          Path('PRODUCTION_COMPLETION_STATUS.md').write_text(text, encoding='utf-8')
+          '@ | Set-Content -Path write_status.py -Encoding UTF8
+          python write_status.py
+          Remove-Item write_status.py
+      - name: Upload immutable live evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-production-live-validation
+          path: live-validation
+          if-no-files-found: error
+          retention-days: 30
+      - name: Remove one-shot transfer and failing baseline tooling
+        shell: pwsh
+        run: |
+          $paths = @(
+            '.github/workflows/export-source.yml',
+            '.github/workflows/baseline-live.yml',
+            '.github/workflows/apply-completion-integration.yml',
+            '.github/workflows/complete-production-v2.yml',
+            'tools/apply_completion_integration.py'
+          )
+          foreach ($path in $paths) {
+            if (Test-Path $path) { Remove-Item $path -Force }
+          }
+          if (Test-Path live-validation) { Remove-Item live-validation -Recurse -Force }
+      - name: Final compile and repository cleanliness check
+        env:
+          HE_NETWORK_POLICY: "off"
+        run: |
+          python -m compileall -q he_app he_crawler.py he_multi_period_crawler.py he_duplicate_checker.py he_live_validator.py
+          python -m pytest -q tests/test_period_cycles.py tests/test_cycle_cache.py tests/test_network_policy.py tests/test_process_isolation.py tests/test_completion_coverage.py
+          git diff --check
+      - name: Publish verified tree to branch and main
+        shell: pwsh
+        run: |
+          git add --all
+          git diff --cached --check
+          if (-not (git diff --cached --quiet)) {
+            git commit -m 'feat: finish production validation, history, cycle and isolation work'
+          }
+          git push origin HEAD:fix/production-completion-20260909
+          git push origin HEAD:main
