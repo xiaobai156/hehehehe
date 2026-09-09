@@ -10,13 +10,50 @@ permissions:
 
 jobs:
   diagnose:
+    name: diagnose-${{ matrix.name }}
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        name:
+          - 电子排版
+          - 朝三暮四
+          - 达罗环宇
+          - 无適无莫
+          - 阳光明媚
+          - 错过中原
+          - 踏雪无痕网
+          - 伤心人家
+          - 残丝断魂
+          - 作舍道旁
+          - 稳打稳中
+          - 通天
+          - 春风化雨
+          - 兴高采烈
+          - 叹为观止
+          - 追根查源
+          - 嫦娥奔月
+          - 东益散人
+          - 没名字一
+          - 丰墙硗下
+          - 怒气冲冲
+          - 挂牌
+          - 没名字五
+          - 和风细雨
+          - 新人旧梦
+          - 流浪高手
+          - 雷锋第一版
+          - 没名字二
+          - 号令如山
+          - 亡羊补牢
     env:
       PYTHONUTF8: '1'
       PYTHONDONTWRITEBYTECODE: '1'
       HE_NETWORK_POLICY: strict
       HE_MAX_RESPONSE_BYTES: '8388608'
+      TARGET_NAME: ${{ matrix.name }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,45 +63,37 @@ jobs:
           python-version: '3.13'
       - name: Install
         run: python -m pip install -e ".[browser,test]"
-      - name: Build remaining site subset
+      - name: Build one-site config
         shell: pwsh
         run: |
           @'
-          import json
+          import json, os
           from pathlib import Path
-          names = {
-              '电子排版','朝三暮四','达罗环宇','无適无莫','阳光明媚','错过中原','踏雪无痕网',
-              '伤心人家','残丝断魂','作舍道旁','稳打稳中','通天','春风化雨','兴高采烈','叹为观止',
-              '追根查源','嫦娥奔月','东益散人','没名字一','丰墙硗下','怒气冲冲','挂牌','没名字五',
-              '和风细雨','新人旧梦','流浪高手','雷锋第一版','没名字二','号令如山','亡羊补牢'
-          }
+          name = os.environ['TARGET_NAME']
           data = json.loads(Path('sites.json').read_text(encoding='utf-8'))
-          subset = [item for item in data if item['name'] in names]
-          missing = sorted(names - {item['name'] for item in subset})
-          if missing or len(subset) != 30:
-              raise SystemExit(f'subset mismatch count={len(subset)} missing={missing}')
-          Path('remaining30.json').write_text(json.dumps(subset, ensure_ascii=False, indent=2), encoding='utf-8')
-          for item in subset:
-              print(f"{item['name']}\t{item['id']}\t{item['pick']}\t{item['url']}")
+          subset = [item for item in data if item['name'] == name]
+          if len(subset) != 1:
+              raise SystemExit(f'expected one site for {name}, got {len(subset)}')
+          Path('one-site.json').write_text(json.dumps(subset, ensure_ascii=False, indent=2), encoding='utf-8')
+          item=subset[0]
+          print(f"TARGET {item['name']} id={item['id']} pick={item['pick']} browser={item['browser']} url={item['url']}")
           '@ | python -
-      - name: Run current production subset
+      - name: Production and raw boundary diagnostic
         shell: pwsh
         run: |
           python he_crawler.py `
             --period 252 `
-            --sites remaining30.json `
-            --workers 6 `
-            --timeout 20 `
-            --hard-timeout 90 `
-            --browser-hard-timeout 130 `
-            --success remaining30-success.txt `
-            --fail remaining30-fail.txt `
+            --sites one-site.json `
+            --workers 1 `
+            --timeout 30 `
+            --hard-timeout 120 `
+            --browser-hard-timeout 160 `
+            --success one-success.txt `
+            --fail one-fail.txt `
             --no-fingerprint-cache-sync
-          Write-Host '===== FAIL FILE ====='
-          if (Test-Path remaining30-fail.txt) { Get-Content remaining30-fail.txt -Encoding UTF8 }
-      - name: Inspect raw 252 and 253 boundary evidence
-        shell: pwsh
-        run: |
+          Write-Host '===== CURRENT RESULT ====='
+          if (Test-Path one-success.txt) { Get-Content one-success.txt -Encoding UTF8 }
+          if (Test-Path one-fail.txt) { Get-Content one-fail.txt -Encoding UTF8 }
           @'
           import re
           from pathlib import Path
@@ -77,78 +106,65 @@ jobs:
           from he_app.services.document_sources import requires_browser
           from he_app.services.single_period import evaluate_site_period
 
-          sites = load_sites(Path('remaining30.json'))
-          host_locks = build_host_locks(sites)
+          site = load_sites(Path('one-site.json'))[0]
+          host_locks = build_host_locks([site])
+          docs=[]
+          browser=None
+          with create_session(host_locks) as session:
+              try:
+                  special = collect_special_documents(session, site, 30, 252)
+                  if special is not None:
+                      docs=list(special)
+                      print(f'SPECIAL_DOCS={len(docs)}')
+              except Exception as exc:
+                  print(f'SPECIAL_ERR={type(exc).__name__}: {exc}')
+              if not docs:
+                  try:
+                      docs=list(collect_http_documents(session, site, 30))
+                      print(f'HTTP_DOCS={len(docs)}')
+                  except Exception as exc:
+                      print(f'HTTP_ERR={type(exc).__name__}: {exc}')
+              if runtime_requires_browser(site, requires_browser):
+                  try:
+                      browser=BrowserClient(headless=True)
+                      browser.start()
+                      bdocs=browser.get_documents(site.url, 252, runtime_click_first(site), 30)
+                      if bdocs:
+                          docs=list(bdocs)
+                          print(f'BROWSER_DOCS={len(docs)}')
+                  except Exception as exc:
+                      print(f'BROWSER_ERR={type(exc).__name__}: {exc}')
+                  finally:
+                      if browser is not None:
+                          close_browser_safely(browser)
 
-          def norm_text(doc):
-              soup = BeautifulSoup(str(doc), 'html.parser')
-              return soup.get_text('\n', strip=True) or str(doc)
+          for period in (252,253):
+              try:
+                  print(f'EVAL_{period}={evaluate_site_period(site, period, docs) if docs else (None,"no docs",[],None)}')
+              except Exception as exc:
+                  print(f'EVAL_{period}_ERR={type(exc).__name__}: {exc}')
 
-          def excerpts(text):
-              lines = [re.sub(r'\s+', ' ', x).strip() for x in text.splitlines() if x.strip()]
-              hits=[]
+          def compact_lines(doc):
+              soup=BeautifulSoup(str(doc),'html.parser')
+              text=soup.get_text('\n',strip=True) or str(doc)
+              return [re.sub(r'\s+',' ',x).strip() for x in text.splitlines() if x.strip()]
+
+          print('===== RAW 252/253 EVIDENCE =====')
+          for di,doc in enumerate(docs[:4]):
+              lines=compact_lines(doc)
+              print(f'DOC {di} source={getattr(doc,"source_url","")} kind={getattr(doc,"fetch_kind","")} lines={len(lines)}')
+              indexes=[i for i,line in enumerate(lines) if re.search(r'(?<!\d)(?:252|253)\s*期',line)]
+              seen=set()
+              for i in indexes[:20]:
+                  chunk=' || '.join(lines[max(0,i-2):min(len(lines),i+3)])[:1600]
+                  if chunk in seen: continue
+                  seen.add(chunk)
+                  print('EX:',chunk)
+              strict=[]
               for i,line in enumerate(lines):
-                  if re.search(r'(?<!\d)(?:252|253)\s*期', line):
-                      lo=max(0,i-2); hi=min(len(lines),i+3)
-                      hits.append(' || '.join(lines[lo:hi])[:1200])
-              uniq=[]
-              for h in hits:
-                  if h not in uniq: uniq.append(h)
-              return uniq[:10]
-
-          for site in sites:
-              print('\n' + '='*90)
-              print(f'SITE {site.name} id={site.site_id} pick={site.pick} browser={runtime_requires_browser(site, requires_browser)}')
-              docs=[]
-              browser=None
-              with create_session(host_locks) as session:
-                  try:
-                      special = collect_special_documents(session, site, 30, 252)
-                      if special is not None:
-                          docs = list(special)
-                          print(f'SPECIAL_DOCS={len(docs)}')
-                  except Exception as exc:
-                      print(f'SPECIAL_ERR={type(exc).__name__}: {exc}')
-                  if not docs:
-                      try:
-                          docs = list(collect_http_documents(session, site, 30))
-                          print(f'HTTP_DOCS={len(docs)}')
-                      except Exception as exc:
-                          print(f'HTTP_ERR={type(exc).__name__}: {exc}')
-                  if runtime_requires_browser(site, requires_browser):
-                      try:
-                          browser = BrowserClient(headless=True)
-                          browser.start()
-                          bdocs = browser.get_documents(site.url, 252, runtime_click_first(site), 30)
-                          if bdocs:
-                              docs = list(bdocs)
-                              print(f'BROWSER_DOCS={len(docs)}')
-                      except Exception as exc:
-                          print(f'BROWSER_ERR={type(exc).__name__}: {exc}')
-                      finally:
-                          if browser is not None:
-                              close_browser_safely(browser)
-              for period in (252,253):
-                  try:
-                      result = evaluate_site_period(site, period, docs) if docs else (None,'no docs',[],None)
-                      print(f'EVAL_{period}={result}')
-                  except Exception as exc:
-                      print(f'EVAL_{period}_ERR={type(exc).__name__}: {exc}')
-              for idx,doc in enumerate(docs[:3]):
-                  text=norm_text(doc)
-                  print(f'DOC[{idx}] source={getattr(doc,"source_url","")} kind={getattr(doc,"fetch_kind","")} chars={len(text)}')
-                  ex=excerpts(text)
-                  if not ex:
-                      print('  NO_252_253_EXCERPT')
-                  for n,h in enumerate(ex,1):
-                      print(f'  EX{n}: {h}')
+                  if re.search(r'(?:绝|絕)\s*(?:杀|殺)\s*一\s*合|(?:杀|殺)\s*一\s*合|(?:杀|殺)\s*合',line):
+                      strict.append((i,line[:500]))
+              if strict:
+                  print('STRICT_FIRST:',strict[:4])
+                  print('STRICT_LAST:',strict[-4:])
           '@ | python -
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: remaining-thirty-diagnostic
-          path: |
-            remaining30.json
-            remaining30-success.txt
-            remaining30-fail.txt
-          retention-days: 7
