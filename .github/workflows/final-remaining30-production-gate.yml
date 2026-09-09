@@ -61,23 +61,32 @@ jobs:
         shell: pwsh
         run: |
           @'
-          import re
+          import json, re
           from pathlib import Path
+          configured={item['name'] for item in json.loads(Path('remaining30.json').read_text(encoding='utf-8'))}
           success=Path('remaining30-success.txt').read_text(encoding='utf-8-sig')
-          main=success.split('当前合数排行',1)[0]
-          lines=[line.strip() for line in main.splitlines() if line.strip()]
-          site_lines=[line for line in lines if re.match(r'^(?:0[1-9]|1[0-3])合(?:,(?:0[1-9]|1[0-3])合)*\s+\S',line)]
-          print('STRICT_SITE_SUCCESSES=',len(site_lines))
-          for line in site_lines: print('OK',line)
+          seen={}
+          for raw in success.splitlines():
+              line=raw.strip()
+              match=re.match(r'^(?P<values>(?:0[1-9]|1[0-3])合(?:,(?:0[1-9]|1[0-3])合)*)\s+(?P<name>.+)$',line)
+              if not match:
+                  continue
+              name=match.group('name').strip()
+              if name in configured:
+                  seen[name]=line
+          print('STRICT_SITE_SUCCESSES=',len(seen))
+          for name in sorted(seen): print('OK',seen[name])
           fail_path=Path('remaining30-fail.txt')
+          fail=''
           if fail_path.exists():
               fail=fail_path.read_text(encoding='utf-8-sig').strip()
               if fail:
                   print('FAIL_FILE_START')
                   print(fail)
                   print('FAIL_FILE_END')
-          if len(site_lines)!=30:
-              raise SystemExit(f'expected 30 strict site successes, got {len(site_lines)}')
+          missing=sorted(configured-set(seen))
+          if len(seen)!=30 or fail:
+              raise SystemExit(f'expected 30 strict site successes, got {len(seen)}; missing={missing}')
           '@ | python -
       - uses: actions/upload-artifact@v4
         if: always()
