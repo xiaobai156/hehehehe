@@ -12,7 +12,7 @@ from he_app.domain.models import Site, SiteRule, SourceDocument
 from he_app.domain.policies import normalize_text
 from he_app.fetch.discovery import collect_documents
 from he_app.fetch.http import fetch_text, fetch_text_with_curl
-from he_app.fetch.network_policy import StrictNetworkPolicy
+from he_app.fetch.url_policy import StrictNetworkPolicy
 from he_app.parsers.common import has_kill_sum_keyword
 from he_app.parsers.dedicated.tables import site_rule
 from he_app.parsers.policies import SITE_RULES
