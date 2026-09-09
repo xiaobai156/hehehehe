@@ -24,10 +24,11 @@ from he_app.services.document_sources import (
 from he_app.services.single_period import evaluate_site_period
 
 
-# These three sites were proven by the 252 live run to contain an exact strict
+# These sites were proven by real 252 runs to contain an exact strict
 # current-period/value row; only the generic page-level locator word was absent.
 # Keep the period, value-count and physical top/bottom edge checks unchanged.
 _RUNTIME_NO_LOCATOR_SITE_IDS = {
+    "s003_topic_193293",
     "s018_mm",
     "s048_979363",
     "s086_aa_959787m_136",
