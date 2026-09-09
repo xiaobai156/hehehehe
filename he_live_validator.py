@@ -1,6 +1,6 @@
 """Read-only production validation entry point."""
 
-from he_app.services.live_validation_adaptive_v2 import main
+from he_app.services.live_validation_scheduled import main
 
 
 if __name__ == "__main__":
