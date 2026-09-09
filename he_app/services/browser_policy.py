@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import replace
 
 from he_app.domain.models import Site, SiteRule
+from he_app.parsers.edge_repairs import apply_remaining_edge_parser_repairs
 from he_app.parsers.policies import SITE_RULES
 
 
@@ -75,6 +76,11 @@ for _site_id in _RENDERED_STRICT_NO_LOCATOR_SITE_IDS:
         note=(f"{_rule.note}; " if _rule.note else "")
         + "live rendered strict edge has no stable generic body locator",
     )
+
+# Install two narrow dedicated repairs after the normal parser registry exists:
+# 踏雪无痕网 binds to its complete rendered history block; 通天 binds the
+# exact 澳门综合杀 heading to the immediately following exact-header table.
+apply_remaining_edge_parser_repairs()
 
 
 # Dynamic 命中劫 home page must navigate to one unique same-origin link
