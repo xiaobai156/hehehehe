@@ -31,9 +31,9 @@ def _success(site: Site, period: int, candidate: Candidate):
 def _taxue_history_blocks(document: str, site_name: str) -> list[str]:
     """Find the smallest rendered article container holding the real history.
 
-    The page repeats the site name in navigation/decoration.  A valid container
+    The page repeats the site name in navigation/decoration. A valid container
     must therefore contain the name plus at least six distinct issue numbers
-    and six strict kill-sum rows.  Choosing the first such ancestor around a
+    and six strict kill-sum rows. Choosing the first such ancestor around a
     name occurrence keeps the physical top/bottom boundary tied to the whole
     history block rather than to one convenient target row.
     """
@@ -237,7 +237,23 @@ def apply_remaining_edge_parser_repairs() -> None:
     from he_app.services import single_period as single_period_module
 
     registry_module.REGISTRY._parsers[_TAXUE_SITE_ID] = _parse_taxue
-    registry_module.REGISTRY._parsers[_TONGTIAN_SITE_ID] = _parse_tongtian
+
+    current_tongtian = registry_module.REGISTRY._parsers[_TONGTIAN_SITE_ID]
+    if not getattr(current_tongtian, "_remaining_edge_combined", False):
+        legacy_tongtian = current_tongtian
+
+        def combined_tongtian(site: Site, period: int, documents: list[str]):
+            live = _parse_tongtian(site, period, documents)
+            # Exact live heading+header evidence always wins. If that structure
+            # is absent, retain the original parser for established legacy/plain
+            # fixtures and older page shapes rather than changing old semantics.
+            if live[3] != "锚点缺失":
+                return live
+            return legacy_tongtian(site, period, documents)
+
+        combined_tongtian._remaining_edge_combined = True  # type: ignore[attr-defined]
+        registry_module.REGISTRY._parsers[_TONGTIAN_SITE_ID] = combined_tongtian
+
     registry_module.WINDOW_PRECHECK_EXEMPT.update({_TAXUE_SITE_ID, _TONGTIAN_SITE_ID})
 
     original = single_period_module._special_segment_is_bounded
