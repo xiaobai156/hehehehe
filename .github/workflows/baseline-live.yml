@@ -36,11 +36,10 @@ jobs:
         shell: bash
         run: |
           python - <<'PY' >> "$GITHUB_OUTPUT"
-          from datetime import datetime
-          from zoneinfo import ZoneInfo
-          current = datetime.now(ZoneInfo("Asia/Tokyo"))
-          print(f"cycle_year={current.year}")
-          print(f"period={current.timetuple().tm_yday}")
+          from he_app.domain.periods import current_tokyo_period
+          current = current_tokyo_period()
+          print(f"cycle_year={current.cycle_year}")
+          print(f"period={current.issue}")
           PY
       - name: Validate all configured sites without production writes
         shell: bash
