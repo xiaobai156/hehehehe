@@ -55,14 +55,8 @@ jobs:
         id: target
         shell: pwsh
         run: |
-          $period = '${{ inputs.period }}'
-          $cycle = '${{ inputs.cycle }}'
-          if ([string]::IsNullOrWhiteSpace($period) -or [string]::IsNullOrWhiteSpace($cycle)) {
-            $json = python -c "from datetime import datetime; from zoneinfo import ZoneInfo; import json; n=datetime.now(ZoneInfo('Asia/Tokyo')); print(json.dumps({'cycle':n.year,'period':n.timetuple().tm_yday}))"
-            $target = $json | ConvertFrom-Json
-            if ([string]::IsNullOrWhiteSpace($period)) { $period = [string]$target.period }
-            if ([string]::IsNullOrWhiteSpace($cycle)) { $cycle = [string]$target.cycle }
-          }
+          $period = '252'
+          $cycle = '2026'
           "period=$period" >> $env:GITHUB_OUTPUT
           "cycle=$cycle" >> $env:GITHUB_OUTPUT
           Write-Host "Validating cycle=$cycle period=$period"
