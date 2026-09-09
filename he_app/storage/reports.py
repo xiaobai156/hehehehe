@@ -4,6 +4,7 @@ from collections import Counter
 from he_app.domain.models import Site
 from he_app.parsers.common import classify_failure, format_failure_result
 from he_app.validation.period import is_valid_sum_value
+from he_app.storage.failure_records import parse_failure_record, parse_failure_records, serialize_failure_record
 
 
 Outcome = tuple[Site, str | None, str, str | None, list[str], str | None]
@@ -72,6 +73,9 @@ def merge_success_output_lines(existing_text: str, current_lines: list[str]) -> 
     for line in current_lines:
         name = _success_line_name(line)
         if name in names:
+            previous = next(item for item in merged if _success_line_name(item) == name)
+            if extract_current_values_from_success(previous) != extract_current_values_from_success(line):
+                raise ValueError(f"已有成功TXT与本次同名站结果冲突: {name}")
             continue
         names.add(name)
         merged.append(line)
@@ -129,16 +133,14 @@ def format_failure_output(fail_lines: list[str], failure_categories: list[str]) 
 
 
 def _failure_record_identity(record: str) -> tuple[str, str]:
-    site_match = FAILURE_SITE_ID_RE.search(record)
-    category_match = FAILURE_CATEGORY_RE.search(record)
-    if site_match is None or category_match is None:
-        raise ValueError(f"失败TXT存在无法识别的记录: {record}")
-    return site_match.group(1), category_match.group(1).strip()
+    parsed = parse_failure_record(record)
+    if not parsed.site_id:
+        raise ValueError(f"失败TXT记录缺少站点ID: {record}")
+    return parsed.site_id, parsed.category
 
 
 def _existing_failure_records(text: str) -> list[str]:
-    body = text.lstrip("\ufeff").split("\n\n失败分类统计", 1)[0]
-    return [record.strip() for record in re.split(r"\r?\n\r?\n", body) if record.strip()]
+    return [serialize_failure_record(item) for item in parse_failure_records(text)]
 
 
 def merge_failure_output(

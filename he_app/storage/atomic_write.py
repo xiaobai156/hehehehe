@@ -13,7 +13,7 @@ PATH_LOCKS_GUARD = Lock()
 
 
 def process_path_lock(path: Path) -> Lock:
-    key = str(path.resolve()).lower()
+    key = os.path.normcase(str(path.resolve()))
     with PATH_LOCKS_GUARD:
         lock = PATH_LOCKS.get(key)
         if lock is None:
@@ -23,7 +23,7 @@ def process_path_lock(path: Path) -> Lock:
 
 
 def _path_mutex_name(path: Path) -> str:
-    digest = hashlib.sha256(str(path.resolve()).casefold().encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(os.path.normcase(str(path.resolve())).encode("utf-8")).hexdigest()
     return f"Local\\CodexHeCrawler-{digest}"
 
 
@@ -135,11 +135,11 @@ def commit_text_transaction_unlocked(
             text, encoding = change
             descriptor, temp_name = tempfile.mkstemp(prefix=f"{path.name}.", suffix=".tmp", dir=path.parent)
             temp_path = Path(temp_name)
+            staged[path] = temp_path
             with os.fdopen(descriptor, "w", encoding=encoding, newline="") as temp_file:
                 temp_file.write(text)
                 temp_file.flush()
                 os.fsync(temp_file.fileno())
-            staged[path] = temp_path
 
         for path, change in changes.items():
             if change is None:
@@ -177,7 +177,10 @@ def commit_text_transaction(
     changes: dict[Path, tuple[str, str] | None],
     timeout: float | None = None,
 ) -> None:
-    paths = sorted(changes, key=lambda path: str(path.resolve()).casefold())
+    resolved = [path.resolve() for path in changes]
+    if len(set(resolved)) != len(resolved):
+        raise ValueError("事务路径存在重复或别名")
+    paths = sorted(changes, key=lambda path: os.path.normcase(str(path.resolve())))
     with ExitStack() as locks:
         for path in paths:
             locks.enter_context(exclusive_path_lock(path, timeout=timeout))

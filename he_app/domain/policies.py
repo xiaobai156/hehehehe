@@ -40,5 +40,5 @@ def normalize_pick(pick: str) -> str:
         return "top"
     if normalized in {"bottom", "尾部", "底部", "下", "下部", "后", "后面"}:
         return "bottom"
-    return normalized or "bottom"
+    raise ValueError(f"非法方向: {pick!r}")
 

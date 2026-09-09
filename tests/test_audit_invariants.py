@@ -490,7 +490,7 @@ def test_chunhua_uses_configured_top_direction() -> None:
     assert result.success and result.value == "04合 春花烂漫"
 
 
-def test_cross_authority_values_conflict_before_fallback() -> None:
+def test_unconfigured_script_cannot_rescue_direction_failure() -> None:
     documents = [
         SourceDocument(
             rows([(214, 2), (213, 2), (212, 2), (211, 1)]),
@@ -508,7 +508,7 @@ def test_cross_authority_values_conflict_before_fallback() -> None:
         ),
     ]
     result = parse_site_period(site("s097_topic_250886"), 211, documents)
-    assert result.success and result.value == "05合 测试站"
+    assert not result.success
 
 
 def test_cross_authority_same_multi_value_candidate_is_not_a_conflict() -> None:
@@ -520,7 +520,7 @@ def test_cross_authority_same_multi_value_candidate_is_not_a_conflict() -> None:
     assert _cross_authority_conflict(site("audit"), 211, evaluations) is None
 
 
-def test_successful_later_document_is_not_blocked_by_old_complete_document() -> None:
+def test_unconfigured_decoded_document_cannot_rescue_old_document() -> None:
     old_document = SourceDocument(
         rows([(214, 1), (213, 2), (212, 3)]),
         fetch_kind="http",
@@ -534,7 +534,7 @@ def test_successful_later_document_is_not_blocked_by_old_complete_document() -> 
         document_id="current",
     )
     result = parse_site_period(site("s097_topic_250886"), 211, [old_document, current_document])
-    assert result.success and result.value == "04合 测试站"
+    assert not result.success
 
 
 def test_record_boundary_rejects_nested_duplicate_id() -> None:
@@ -592,11 +592,13 @@ def test_same_row_evidence_records_real_source_identity() -> None:
         authority_id="script:a",
         document_id="script:a:1",
     )
-    result = parse_site_period(site("s097_topic_250886"), 211, [document])
-    assert result.success
-    assert result.evidence[0].source_url == "https://cdn.test/a.js"
-    assert result.evidence[0].authority_id == "script:a"
-    assert result.evidence[0].block_start >= 0
+    evidence = build_document_evidence(site("s097_topic_250886"), 211, ["03合"],
+                                       str(document), [document])
+    assert evidence
+    assert evidence[0].source_url == "https://cdn.test/a.js"
+    assert evidence[0].authority_id == "script:a"
+    assert evidence[0].block_start >= 0
+    assert not parse_site_period(site("s097_topic_250886"), 211, [document]).success
 
 
 def test_cache_layer_writes_current_value_on_conflict(tmp_path: Path) -> None:
@@ -830,7 +832,7 @@ def test_runner_preserves_live_txt_when_cache_update_fails(
 
 
 def test_runner_cli_defaults_and_future_exception_fallback() -> None:
-    args = runner.build_arg_parser().parse_args([])
+    args = runner.build_arg_parser().parse_args(["--period", "211"])
     test_site = site("audit")
 
     class FailedFuture:

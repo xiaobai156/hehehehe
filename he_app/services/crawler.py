@@ -1,5 +1,4 @@
 from threading import Lock
-from urllib.parse import urlparse, urlunparse
 
 import requests
 
@@ -10,8 +9,8 @@ from he_app.fetch.discovery import collect_documents
 from he_app.fetch.http import create_session
 from he_app.parsers.dedicated.tables import site_rule
 from he_app.services.document_sources import (
-    collect_special_site_browser_documents,
     collect_special_site_documents,
+    requires_browser,
 )
 from he_app.services.single_period import evaluate_site_period
 
@@ -19,20 +18,10 @@ from he_app.services.single_period import evaluate_site_period
 Outcome = tuple[int, Site, str | None, str, str | None, list[str], str | None]
 
 def build_mirror_urls(site: Site, all_sites: list[Site], limit: int) -> list[str]:
-    if limit <= 0 or "/topic/" not in site.url:
-        return []
-    base = urlparse(site.url)
-    result = []
-    for other in all_sites:
-        parsed = urlparse(other.url)
-        if not parsed.netloc or parsed.netloc == base.netloc:
-            continue
-        url = urlunparse((parsed.scheme, parsed.netloc, base.path, "", base.query, ""))
-        if url not in result:
-            result.append(url)
-        if len(result) >= limit:
-            break
-    return result
+    if limit:
+        raise ValueError("自动拼接镜像已停用，请在正式配置中使用已验证URL")
+    return []
+
 
 def build_mirror_url_map(sites: list[Site], limit: int) -> dict[int, list[str]]:
     return {i: build_mirror_urls(site, sites, limit) for i, site in enumerate(sites)}
@@ -55,17 +44,15 @@ def scrape_site(
     if site.browser:
         if browser is None:
             raise RuntimeError("browser client is required")
-        rule = site_rule(site)
         documents = browser.get_documents(
             site.url,
             period,
             site.click_first,
             timeout,
-            rule.browser_wait_selector,
-            rule.browser_wait_anchor,
         )
     else:
-        documents = collect_documents(session, site.url, timeout)
+        documents = collect_documents(session, site.url, timeout,
+            allow_inline_decode="http-decoded" in site_rule(site).allowed_fetch_kinds)
     return evaluate_site_period(site, period, documents)
 
 
@@ -73,24 +60,15 @@ def scrape_site_with_browser(
     session: requests.Session, site: Site, period: int, timeout: int, browser: BrowserClient
 ) -> tuple[str | None, str, list[str], str | None]:
     try:
-        documents = collect_special_site_browser_documents(browser, site, timeout, period)
-    except SiteScrapeFailure as exc:
-        return None, exc.reason, [], exc.category
-    if documents is not None:
-        return evaluate_site_period(site, period, documents)
-    try:
         documents = collect_special_site_documents(session, site, timeout, period)
     except SiteScrapeFailure as exc:
         return None, exc.reason, [], exc.category
     if documents is None:
-        rule = site_rule(site)
         documents = browser.get_documents(
             site.url,
             period,
             site.click_first,
             timeout,
-            rule.browser_wait_selector,
-            rule.browser_wait_anchor,
         )
     return evaluate_site_period(site, period, documents)
 
@@ -128,7 +106,7 @@ def scrape_parallel_site(
     browser_pool: BrowserPool | None = None,
 ) -> Outcome:
     try:
-        if site.browser:
+        if requires_browser(site):
             owns_pool = browser_pool is None
             pool = browser_pool or BrowserPool(1, headless=not show_browser)
             if owns_pool:

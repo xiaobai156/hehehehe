@@ -4,6 +4,7 @@ from bs4 import BeautifulSoup
 
 from he_app.domain.models import Candidate, FailureInfo, Site
 from he_app.domain.policies import normalize_digit_text, normalize_pick, normalize_text
+from he_app.storage.failure_records import FailureRecord, serialize_failure_record
 from he_app.parsers.policies import (
     BODY_LOCATOR_RE,
     PERIOD_RE,
@@ -13,6 +14,33 @@ from he_app.parsers.policies import (
     VALUE_RE,
     WEAK_KILL_SUM_RE,
 )
+
+
+class ScopedChunk(str):
+    """A text representation with a locator scoped to its actual DOM record."""
+    def __new__(cls, text: str, located: bool):
+        value = super().__new__(cls, text)
+        value.located = located
+        return value
+
+
+def _node_has_locator(tag) -> bool:
+    for node in [tag, *tag.parents]:
+        if getattr(node, "name", None) in {"article", "main", "table"} or "topic-content" in (node.get("class", []) if hasattr(node, "get") else []):
+            return True
+        if getattr(node, "name", None) in {"body", "html", "[document]"}:
+            break
+    # A parent DIV covering two unrelated sections is not a local locator.
+    if tag.find(["article", "section", "div", "p", "table", "tr", "li"]) is not None:
+        return False
+    return has_body_locator(tag.get_text(" ", strip=True))
+
+
+def _plain_text_locator(document: str) -> bool:
+    if BeautifulSoup(document, "html.parser").find() is None:
+        sections = re.split(r"(?:其他栏目|另一个栏目|第三个栏目|另一个资料块)", document)
+        return len(sections) == 1 and has_body_locator(document)
+    return False
 
 
 def document_text_lines(document: str) -> list[str]:
@@ -27,7 +55,7 @@ def candidate_chunks(document: str, period: int) -> list[str]:
     for tag in soup.find_all(["p", "div", "td", "tr", "li", "font", "span", "b", "strong"]):
         text = normalize_text(tag.get_text(" ", strip=True))
         if text:
-            chunks.append(text)
+            chunks.append(ScopedChunk(text, _node_has_locator(tag)))
 
     lines = [normalize_text(line) for line in soup.get_text("\n", strip=True).splitlines()]
     lines = [line for line in lines if line]
@@ -228,16 +256,37 @@ def is_contained_duplicate_candidate(line: str, values: list[str], existing: lis
     return False
 
 
+def _physical_parts(document: str, parts: list[tuple[str, bool]]) -> list[tuple[str, bool]]:
+    """Deduplicate DOM representations, not distinct physical occurrences.
+
+    An identical last row must still occupy the bottom boundary even if the
+    same text appeared earlier. All positions refer to this one document.
+    """
+    text = normalize_digit_text(normalize_text(
+        BeautifulSoup(document, "html.parser").get_text(" ", strip=True) or document))
+    positioned: dict[int, tuple[str, bool]] = {}
+    for line, located in parts:
+        normalized = normalize_digit_text(normalize_text(line))
+        for match in re.finditer(re.escape(normalized), text):
+            previous = positioned.get(match.start())
+            if previous is None or len(line) < len(previous[0]):
+                positioned[match.start()] = (line, located)
+            elif line == previous[0] and located:
+                positioned[match.start()] = (line, True)
+    return [positioned[position] for position in sorted(positioned)]
+
+
 def build_candidate_parts(documents: list[str], period: int, allow_weak: bool = False) -> list[tuple[str, bool]]:
     parts: list[tuple[str, bool]] = []
-    seen: set[tuple[str, bool]] = set()
-    accepted_lines: list[str] = []
     for document in documents:
+        document_parts: list[tuple[str, bool]] = []
+        seen: set[tuple[str, bool]] = set()
+        accepted_lines: list[str] = []
         if not has_kill_sum_keyword(document, allow_weak):
             continue
-        document_has_locator = has_body_locator(document)
+        plain_locator = _plain_text_locator(document)
         for chunk in candidate_chunks(document, period):
-            chunk_has_locator = document_has_locator or has_body_locator(chunk) or is_table_kill_sum_chunk(chunk)
+            chunk_has_locator = getattr(chunk, "located", plain_locator)
             if is_table_kill_sum_chunk(chunk):
                 candidates = build_table_period_parts(chunk, period) or [chunk]
             else:
@@ -257,7 +306,8 @@ def build_candidate_parts(documents: list[str], period: int, allow_weak: bool = 
                     continue
                 seen.add(key)
                 accepted_lines.append(line)
-                parts.append((line, chunk_has_locator))
+                document_parts.append((line, chunk_has_locator))
+        parts.extend(_physical_parts(document, document_parts))
     return parts
 
 
@@ -268,7 +318,7 @@ def latest_candidate_chunks(document: str) -> list[str]:
     for tag in soup.find_all(["p", "div", "td", "tr", "li", "font", "span", "b", "strong"]):
         text = normalize_text(tag.get_text(" ", strip=True))
         if text:
-            chunks.append(text)
+            chunks.append(ScopedChunk(text, _node_has_locator(tag)))
 
     lines = [normalize_text(line) for line in soup.get_text("\n", strip=True).splitlines()]
     chunks.extend(line for line in lines if line)
@@ -284,14 +334,15 @@ def build_latest_candidate_parts(
     stop_after: int | None = None,
 ) -> list[tuple[str, bool]]:
     parts: list[tuple[str, bool]] = []
-    seen: set[tuple[str, bool]] = set()
-    accepted_lines: list[str] = []
     for document in documents:
+        document_parts: list[tuple[str, bool]] = []
+        seen: set[tuple[str, bool]] = set()
+        accepted_lines: list[str] = []
         if not has_kill_sum_keyword(document, allow_weak):
             continue
-        document_has_locator = has_body_locator(document)
+        plain_locator = _plain_text_locator(document)
         for chunk in latest_candidate_chunks(document):
-            chunk_has_locator = document_has_locator or has_body_locator(chunk) or is_table_kill_sum_chunk(chunk)
+            chunk_has_locator = getattr(chunk, "located", plain_locator)
             if is_table_kill_sum_chunk(chunk):
                 candidates = split_all_period_segments(chunk) or [chunk]
             else:
@@ -311,9 +362,10 @@ def build_latest_candidate_parts(
                     continue
                 seen.add(key)
                 accepted_lines.append(line)
-                parts.append((line, chunk_has_locator))
-                if stop_after is not None and len(parts) >= stop_after:
-                    return parts
+                document_parts.append((line, chunk_has_locator))
+        parts.extend(_physical_parts(document, document_parts))
+        if stop_after is not None and len(parts) >= stop_after:
+            return parts[:stop_after]
     return parts
 
 
@@ -628,9 +680,9 @@ def diagnose_candidate_state(documents: list[str], period: int, allow_weak: bool
     }
 
     for document in documents:
-        document_has_locator = has_body_locator(document)
+        plain_locator = _plain_text_locator(document)
         for chunk in candidate_chunks(document, period):
-            chunk_has_locator = document_has_locator or has_body_locator(chunk) or is_table_kill_sum_chunk(chunk)
+            chunk_has_locator = getattr(chunk, "located", plain_locator)
             candidates = split_period_segments(chunk, period) or [chunk]
             for candidate in candidates:
                 line = normalize_digit_text(normalize_text(candidate))
@@ -773,10 +825,10 @@ def format_failure_result(
     site_prefix = f"{site.name} "
     if reason.startswith(site_prefix):
         reason = reason[len(site_prefix) :].lstrip()
-    return (
-        f"失败 {site.name} {site.url} 方向: {site.pick} 期数: {period} "
-        f"阶段: {failure_stage(failure.category)} 原因: {reason}"
-    )
+    return serialize_failure_record(FailureRecord(
+        site.site_id, site.name, site.url, site.pick, period,
+        failure.category, failure_stage(failure.category), reason,
+    ))
 
 
 __all__ = [

@@ -29,7 +29,7 @@ def test_failure_line_uses_requested_single_line_contract() -> None:
 
     assert result == (
         "失败 飞龙在天 https://anhomo.n03wh-m2skn-wssphn.xyz/ "
-        "方向: bottom 期数: 213 阶段: 指定期数校验 原因: 没有找到213期数据"
+        "站点ID: failure-format 方向: bottom 期数: 213 阶段: 指定期数校验 失败类型: 无当期 具体原因: 没有找到213期数据"
     )
 
 
@@ -85,7 +85,7 @@ def test_current_results_preserve_explicit_categories_and_classify_errors() -> N
     assert len(failures) == 2
     assert ranking_values == ["03合"]
     assert categories == ["未来新增分类", "请求失败"]
-    assert build_success_output_lines(success, ranking_values)[-1] == "1. 03合 1次"
+    assert build_success_output_lines(success, ranking_values)[-1] == "03合\t1\t1"
 
 
 def test_empty_failure_output_has_no_summary() -> None:

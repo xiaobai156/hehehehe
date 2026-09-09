@@ -1150,16 +1150,11 @@ def find_baxianguohai_kill_sum_candidate(
     return select_dedicated_candidate(matches, pick)
 
 
-def find_anchor_latest_candidate(
-    site: Site,
-    documents: list[str],
-    period: int,
-) -> tuple[Candidate | None, str | None, str | None]:
+def anchor_document_blocks(site: Site, documents: list[str]) -> tuple[list[str], bool]:
+    """Share the same author boundary between daily parsing and history extraction."""
     rule = site_rule(site)
-    pick = normalize_pick(rule.anchor_pick or site.pick)
     if not rule.anchor_text or not rule.latest_after_anchor:
-        return None, None, None
-
+        return [], False
     anchor_text = normalize_digit_text(normalize_text(rule.anchor_text))
     strict_author_block = site.site_id in {
         "s004_topic_225401",
@@ -1200,7 +1195,9 @@ def find_anchor_latest_candidate(
                         if strict_author_block
                         else published_prefix_re.search(normalized_lines[next_index]) is not None
                         if strict_published_block
-                        else anchor_text in normalized_lines[next_index]
+                        else (anchor_text in normalized_lines[next_index]
+                              or author_prefix_re.search(normalized_lines[next_index]) is not None
+                              or published_prefix_re.search(normalized_lines[next_index]) is not None)
                     )
                 ),
                 len(lines),
@@ -1220,6 +1217,21 @@ def find_anchor_latest_candidate(
                     block_lines.append(trailing_text)
             block_lines.extend(lines[index + 1 : next_anchor_index])
             anchor_blocks.append("\n".join(block_lines))
+
+    return anchor_blocks, found_anchor
+
+
+def find_anchor_latest_candidate(
+    site: Site,
+    documents: list[str],
+    period: int,
+) -> tuple[Candidate | None, str | None, str | None]:
+    rule = site_rule(site)
+    pick = normalize_pick(rule.anchor_pick or site.pick)
+    if not rule.anchor_text or not rule.latest_after_anchor:
+        return None, None, None
+
+    anchor_blocks, found_anchor = anchor_document_blocks(site, documents)
 
     if anchor_blocks:
         candidate, conflict_values, conflict_lines = trusted_candidate_with_conflict(
