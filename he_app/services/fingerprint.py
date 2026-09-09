@@ -9,7 +9,7 @@ from bs4 import BeautifulSoup
 
 from he_app.domain.errors import SiteScrapeFailure
 from he_app.domain.models import Candidate, Site
-from he_app.domain.periods import PeriodKey, issue_map_for_window
+from he_app.domain.periods import PeriodKey, issue_map_for_window, period_window
 from he_app.parsers.common import build_latest_candidate_parts, extract_values, period_numbers_in_text
 from he_app.parsers.dedicated import history, structured, tables, kaijiangfacai, ttss
 from he_app.parsers.registry import REGISTRY
@@ -64,9 +64,17 @@ def _history_rows(site: Site, document: str, period: int) -> list[Candidate]:
     rule = tables.site_rule(site)
     if parser is REGISTRY.default and rule.anchor_text:
         blocks, _found = history.anchor_document_blocks(site, [document])
-        selected = _edge_block([[block] for block in blocks], site.pick)
-        return _parts_to_candidates(build_latest_candidate_parts(selected, rule.allow_weak_kill_sum_keyword),
-                                    rule.allow_weak_kill_sum_keyword)
+        candidate_blocks = []
+        for block in blocks:
+            parts = build_latest_candidate_parts(
+                [block], rule.allow_weak_kill_sum_keyword
+            )
+            candidates = _parts_to_candidates(
+                parts, rule.allow_weak_kill_sum_keyword
+            )
+            if candidates:
+                candidate_blocks.append(candidates)
+        return _edge_block(candidate_blocks, site.pick)
     if parser.__name__ in {"_parse_batch", "_parse_batch_author"}:
         # A document with separate article bodies needs an explicit block adapter.
         soup = BeautifulSoup(document, "html.parser")
@@ -98,6 +106,70 @@ def _history_rows(site: Site, document: str, period: int) -> list[Candidate]:
     return _parts_to_candidates(parts, rule.allow_weak_kill_sum_keyword)
 
 
+
+def _candidate_issue(candidate: Candidate) -> int | None:
+    issues = period_numbers_in_text(candidate.line)
+    if not issues or any(issue != issues[0] for issue in issues):
+        return None
+    return issues[0]
+
+
+def _directional_current_cycle(
+    rows: list[Candidate],
+    base: PeriodKey,
+    periods: int,
+    pick: str,
+    current_value: str,
+) -> list[Candidate]:
+    """Return only the contiguous cycle containing the selected edge row.
+
+    Long-running pages often contain several calendar cycles with the same
+    bare issue numbers.  Once the current parser proves the exact top/bottom
+    edge, historical extraction must follow the physically adjacent older
+    rows from that edge; a later/earlier cycle may not create false conflicts
+    or fill gaps.
+    """
+
+    matches = [
+        index
+        for index, candidate in enumerate(rows)
+        if _candidate_issue(candidate) == base.issue
+        and candidate.values == current_value
+    ]
+    if not matches:
+        return []
+
+    anchor = matches[0] if pick == "top" else matches[-1]
+    step = 1 if pick == "top" else -1
+    expected = period_window(base, periods)
+    selected = [rows[anchor]]
+    cursor = anchor
+
+    for key in expected[1:]:
+        cursor += step
+        # Nested HTML may expose an exact duplicate of the same physical row.
+        # Skip only exact issue/value/line duplicates; any other repeated or
+        # unexpected issue marks a real boundary and stops the cycle.
+        while 0 <= cursor < len(rows):
+            candidate = rows[cursor]
+            previous = selected[-1]
+            if (
+                _candidate_issue(candidate) == _candidate_issue(previous)
+                and candidate.values == previous.values
+                and candidate.line == previous.line
+            ):
+                cursor += step
+                continue
+            break
+        if not 0 <= cursor < len(rows):
+            break
+        candidate = rows[cursor]
+        if _candidate_issue(candidate) != key.issue:
+            break
+        selected.append(candidate)
+
+    return selected
+
 def build_site_period_fingerprint(
     site: Site,
     documents: list[str],
@@ -124,7 +196,15 @@ def build_site_period_fingerprint(
         }
         values_by_key: dict[PeriodKey, str] = {}
         ambiguous: set[PeriodKey] = set()
-        for candidate in _history_rows(site, document, base.issue):
+        current_value = ",".join(edge.evidence[0].values)
+        history_rows = _directional_current_cycle(
+            _history_rows(site, document, base.issue),
+            base,
+            periods,
+            site.pick,
+            current_value,
+        )
+        for candidate in history_rows:
             issues = period_numbers_in_text(candidate.line)
             if not issues or any(issue != issues[0] for issue in issues):
                 continue
