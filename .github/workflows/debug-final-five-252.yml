@@ -1,0 +1,142 @@
+name: Debug final five 252 failures
+
+on:
+  push:
+    branches:
+      - fix/final-five-252-20260909
+    paths:
+      - .github/workflows/debug-final-five-252.yml
+
+permissions:
+  contents: read
+
+jobs:
+  site:
+    strategy:
+      fail-fast: false
+      matrix:
+        site_id:
+          - s051_topic_702074
+          - s065_topic_437721
+          - s108_topic_1024380
+          - s124_22_868393c_art_zhuanqu_8129
+          - s129_topic_732154
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      PYTHONUTF8: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      HE_NETWORK_POLICY: strict
+      HE_MAX_RESPONSE_BYTES: "8388608"
+      TARGET_SITE_ID: ${{ matrix.site_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: python -m pip install -e ".[browser,test]"
+      - name: Build one-site config
+        shell: pwsh
+        run: |
+          @'
+          import json, os
+          target = os.environ["TARGET_SITE_ID"]
+          sites = json.load(open("sites.json", encoding="utf-8-sig"))
+          subset = [item for item in sites if item["id"] == target]
+          assert len(subset) == 1, target
+          json.dump(subset, open("one-site.json", "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+          print(subset[0])
+          '@ | Set-Content one_site.py -Encoding UTF8
+          python one_site.py
+      - name: Inspect live structure
+        shell: pwsh
+        run: |
+          @'
+          import os, re, ssl, socket, tempfile
+          from urllib.parse import urlparse
+          import requests
+          from bs4 import BeautifulSoup
+          from he_app.config.sites import load_sites
+          from he_app.fetch.http import create_session
+          from he_app.fetch.discovery import collect_documents
+          from he_app.services.adaptive_fetch import collect_http_documents, collect_special_documents
+          from pathlib import Path
+
+          site = load_sites(Path("one-site.json"))[0]
+          print("SITE", site.site_id, site.name, site.url, site.pick, "browser=", site.browser)
+          with create_session() as session:
+              try:
+                  special = collect_special_documents(session, site, 20, 252)
+                  print("SPECIAL", "none" if special is None else len(special))
+              except Exception as exc:
+                  print("SPECIAL_ERROR", type(exc).__name__, str(exc)[:1500])
+              try:
+                  docs = collect_http_documents(session, site, 20)
+                  print("HTTP_DOCS", len(docs))
+                  for i, doc in enumerate(docs[:8]):
+                      text = BeautifulSoup(str(doc), "html.parser").get_text(" ", strip=True)
+                      norm = re.sub(r"\s+", " ", text)
+                      print("DOC", i, getattr(doc, "source_url", ""), getattr(doc, "fetch_kind", ""), len(norm))
+                      needles = [site.name, "252期", "253期", "绝杀一合", "作者", "发表于", "发表"]
+                      spans = []
+                      for needle in needles:
+                          start = 0
+                          for _ in range(4):
+                              pos = norm.find(needle, start)
+                              if pos < 0: break
+                              spans.append((max(0, pos-180), min(len(norm), pos+420), needle))
+                              start = pos + len(needle)
+                      for a,b,n in spans[:20]:
+                          print("SNIP", n, norm[a:b])
+              except Exception as exc:
+                  print("HTTP_ERROR", type(exc).__name__, str(exc)[:1500])
+
+              if site.site_id == "s108_topic_1024380":
+                  try:
+                      docs = collect_documents(session, site.url, 20)
+                      for doc in docs:
+                          soup = BeautifulSoup(str(doc), "html.parser")
+                          for a in soup.find_all("a", href=True):
+                              text = re.sub(r"\s+", "", a.get_text(" ", strip=True))
+                              if any(k in text for k in ("252", "253", "命中", "绝杀")):
+                                  print("LINK", text[:240], a.get("href"))
+                  except Exception as exc:
+                      print("HOME_ERROR", type(exc).__name__, str(exc)[:1500])
+
+          if site.site_id == "s124_22_868393c_art_zhuanqu_8129":
+              parsed = urlparse(site.url)
+              try:
+                  pem = ssl.get_server_certificate((parsed.hostname, parsed.port or 443))
+                  with tempfile.NamedTemporaryFile("w", suffix=".pem", delete=False) as fh:
+                      fh.write(pem); cert_path = fh.name
+                  decoded = ssl._ssl._test_decode_cert(cert_path)
+                  print("CERT", decoded)
+              except Exception as exc:
+                  print("CERT_ERROR", type(exc).__name__, str(exc)[:1500])
+              http_url = site.url.replace("https://", "http://", 1)
+              try:
+                  response = requests.get(http_url, timeout=15, allow_redirects=False)
+                  print("HTTP_PLAIN", response.status_code, response.headers.get("Location"), response.text[:500].replace("\n", " "))
+              except Exception as exc:
+                  print("HTTP_PLAIN_ERROR", type(exc).__name__, str(exc)[:1500])
+          '@ | Set-Content diagnose.py -Encoding UTF8
+          python diagnose.py
+      - name: Run isolated production path
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force result | Out-Null
+          python he_crawler.py `
+            --period 252 `
+            --sites one-site.json `
+            --workers 1 `
+            --timeout 20 `
+            --hard-timeout 90 `
+            --browser-hard-timeout 150 `
+            --success result/success.txt `
+            --fail result/fail.txt `
+            --no-fingerprint-cache-sync
+          if (Test-Path result/success.txt) { Get-Content result/success.txt -Encoding UTF8 }
+          if (Test-Path result/fail.txt) { Get-Content result/fail.txt -Encoding UTF8 }
