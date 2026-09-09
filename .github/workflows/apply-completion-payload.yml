@@ -39,9 +39,12 @@ jobs:
               raise SystemExit(f"payload hash mismatch: {actual}")
           Path('/tmp/production-completion.patch').write_bytes(gzip.decompress(archive))
           PY
+          cp .github/workflows/baseline-live.yml /tmp/baseline-live.original.yml
           rm -f .github/workflows/baseline-live.yml
           git apply --check /tmp/production-completion.patch
           git apply /tmp/production-completion.patch
+          cp .github/workflows/baseline-live.yml /tmp/baseline-live.desired.yml
+          cp /tmp/baseline-live.original.yml .github/workflows/baseline-live.yml
           rm -rf .completion_payload
       - name: Install and verify
         run: |
@@ -62,5 +65,5 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
           git diff --cached --check
-          git commit -m 'feat: complete cycle-aware live validation and hard isolation'
+          git commit -m 'feat: complete cycle-aware validation and hard isolation'
           git push origin HEAD:fix/production-completion-20260909
