@@ -10,7 +10,7 @@ import subprocess
 import time
 from contextlib import nullcontext
 from threading import Lock
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import requests
 
@@ -125,8 +125,8 @@ def curl_base_command(url: str, timeout: float, resolved=None) -> list[str]:
     executable = shutil.which("curl.exe") or shutil.which("curl")
     if executable is None:
         raise RuntimeError("未安装curl，无法使用兼容传输")
-    # No -k, -L, protocol downgrade, or automatic retry. A curl-only redirect
-    # is rejected rather than followed before its destination can be checked.
+    # Never use -k or -L. Redirects are surfaced to Python, origin-checked,
+    # DNS-resolved again, and then fetched as a separate pinned request.
     command = [executable, "--proto", "=http,https", "--http1.1", "--max-redirs", "0",
                "--noproxy", "*", "--connect-timeout", str(min(timeout, 10.0)),
                "--max-time", str(timeout), "--max-filesize", str(MAX_RESPONSE_BYTES),
@@ -148,6 +148,22 @@ def split_curl_http_status(raw: bytes) -> tuple[bytes, int | None]:
     return (body, int(status.strip())) if re.fullmatch(rb"\d{3}", status.strip()) else (body, None)
 
 
+def _split_curl_metadata(raw: bytes) -> tuple[bytes, int | None, str]:
+    redirect_marker = b"\n__REDIRECT_URL__:"
+    status_marker = b"\n__HTTP_STATUS__:"
+    if redirect_marker not in raw or status_marker not in raw:
+        body, status = split_curl_http_status(raw)
+        return body, status, ""
+    before_redirect, redirect_raw = raw.rsplit(redirect_marker, 1)
+    body, status_raw = before_redirect.rsplit(status_marker, 1)
+    status = int(status_raw.strip()) if re.fullmatch(rb"\d{3}", status_raw.strip()) else None
+    try:
+        redirect_url = redirect_raw.strip().decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise RuntimeError("curl重定向URL不是有效UTF-8") from exc
+    return body, status, redirect_url
+
+
 def should_try_next_curl_variant(returncode: int, status: int | None, message: str) -> bool:
     return False
 
@@ -158,21 +174,60 @@ def reset_curl_variant_memory() -> None:
 
 
 def fetch_text_with_curl(url: str, timeout: float, resolved=None) -> str:
-    url_origin(url)
-    resolved = resolved or StrictNetworkPolicy(require_peer=False).resolve(url)
-    command = curl_command_variants(url, timeout, resolved)[0]
-    command = command[:-1] + ["-w", "\n__HTTP_STATUS__:%{http_code}", command[-1]]
-    result = subprocess.run(command, capture_output=True, check=False, timeout=timeout)
-    body, status = split_curl_http_status(result.stdout)
-    if result.returncode:
-        # Lossy decoding is only for diagnostics, never for candidate content.
-        message = result.stderr.decode("utf-8", errors="replace")[:300]
-        raise RuntimeError(f"curl exit {result.returncode}: {message}")
-    if status is None or not 200 <= status < 300:
-        raise RuntimeError(f"HTTP Error {status}: curl未取得有效2xx响应")
-    if len(body) > MAX_RESPONSE_BYTES:
-        raise RuntimeError("curl响应超过8MiB上限")
-    return FetchedText(decode_response_bytes(body), final_url=url, status_code=status)
+    """Fetch through curl with manual, same-origin, DNS-pinned redirects."""
+
+    original = url
+    url_origin(original)
+    policy = StrictNetworkPolicy(require_peer=False)
+    current = original
+    first_resolved = resolved
+    deadline = time.monotonic() + timeout
+
+    for redirect_count in range(6):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("curl请求预算已耗尽")
+        current_resolved = (
+            first_resolved
+            if redirect_count == 0 and first_resolved is not None
+            else policy.resolve(current)
+        )
+        command = curl_command_variants(current, remaining, current_resolved)[0]
+        command = command[:-1] + [
+            "-w",
+            "\n__HTTP_STATUS__:%{http_code}\n__REDIRECT_URL__:%{redirect_url}",
+            command[-1],
+        ]
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            check=False,
+            timeout=max(0.1, remaining),
+        )
+        body, status, redirect_url = _split_curl_metadata(result.stdout)
+        if result.returncode:
+            # Lossy decoding is only for diagnostics, never for candidate content.
+            message = result.stderr.decode("utf-8", errors="replace")[:300]
+            raise RuntimeError(f"curl exit {result.returncode}: {message}")
+
+        if status in {301, 302, 303, 307, 308}:
+            if not redirect_url:
+                raise RuntimeError("curl重定向缺少目标URL")
+            target = urljoin(current, redirect_url)
+            current = same_origin_url(original, target)
+            continue
+
+        if status is None or not 200 <= status < 300:
+            raise RuntimeError(f"HTTP Error {status}: curl未取得有效2xx响应")
+        if len(body) > MAX_RESPONSE_BYTES:
+            raise RuntimeError("curl响应超过8MiB上限")
+        return FetchedText(
+            decode_response_bytes(body),
+            final_url=current,
+            status_code=status,
+        )
+
+    raise RuntimeError("curl重定向次数超过限制")
 
 
 def http_status_label(status: int | None) -> str:

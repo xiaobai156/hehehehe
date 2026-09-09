@@ -5,17 +5,18 @@ import requests
 from he_app.domain.errors import SiteScrapeFailure
 from he_app.domain.models import Site
 from he_app.fetch.browser import BrowserClient, BrowserPool
-from he_app.fetch.discovery import collect_documents
 from he_app.fetch.http import create_session
-from he_app.parsers.dedicated.tables import site_rule
-from he_app.services.document_sources import (
-    collect_special_site_documents,
-    requires_browser,
+from he_app.services.adaptive_fetch import (
+    collect_http_documents,
+    collect_special_documents,
+    try_http_current,
 )
+from he_app.services.document_sources import requires_browser
 from he_app.services.single_period import evaluate_site_period
 
 
 Outcome = tuple[int, Site, str | None, str, str | None, list[str], str | None]
+
 
 def build_mirror_urls(site: Site, all_sites: list[Site], limit: int) -> list[str]:
     if limit:
@@ -35,13 +36,23 @@ def scrape_site(
     browser: BrowserClient | None = None,
 ) -> tuple[str | None, str, list[str], str | None]:
     try:
-        documents = collect_special_site_documents(session, site, timeout, period)
+        documents = collect_special_documents(session, site, timeout, period)
     except SiteScrapeFailure as exc:
         return None, exc.reason, [], exc.category
     if documents is not None:
         return evaluate_site_period(site, period, documents)
 
     if site.browser:
+        # A browser flag means browser is allowed/needed as fallback, not that
+        # a heavyweight driver must be the first transport. Accept HTTP only
+        # after the unchanged strict parser proves exact period + direction.
+        try:
+            probed = try_http_current(session, site, period, min(timeout, 8))
+        except Exception:
+            probed = None
+        if probed is not None:
+            _documents, evaluation = probed
+            return evaluation
         if browser is None:
             raise RuntimeError("browser client is required")
         documents = browser.get_documents(
@@ -51,8 +62,7 @@ def scrape_site(
             timeout,
         )
     else:
-        documents = collect_documents(session, site.url, timeout,
-            allow_inline_decode="http-decoded" in site_rule(site).allowed_fetch_kinds)
+        documents = collect_http_documents(session, site, timeout)
     return evaluate_site_period(site, period, documents)
 
 
@@ -60,16 +70,26 @@ def scrape_site_with_browser(
     session: requests.Session, site: Site, period: int, timeout: int, browser: BrowserClient
 ) -> tuple[str | None, str, list[str], str | None]:
     try:
-        documents = collect_special_site_documents(session, site, timeout, period)
+        documents = collect_special_documents(session, site, timeout, period)
     except SiteScrapeFailure as exc:
         return None, exc.reason, [], exc.category
-    if documents is None:
-        documents = browser.get_documents(
-            site.url,
-            period,
-            site.click_first,
-            timeout,
-        )
+    if documents is not None:
+        return evaluate_site_period(site, period, documents)
+
+    try:
+        probed = try_http_current(session, site, period, min(timeout, 8))
+    except Exception:
+        probed = None
+    if probed is not None:
+        _documents, evaluation = probed
+        return evaluation
+
+    documents = browser.get_documents(
+        site.url,
+        period,
+        site.click_first,
+        timeout,
+    )
     return evaluate_site_period(site, period, documents)
 
 
