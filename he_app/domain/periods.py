@@ -1,6 +1,6 @@
 """Cycle-aware period identity for daily issue numbers.
 
-The source pages expose bare day-of-year issue numbers (001..365/366).  A bare
+The source pages expose bare day-of-year issue numbers (001..365/366). A bare
 integer is not globally unique, so persistence and duplicate comparison use a
 ``PeriodKey`` containing the calendar cycle year and the issue number.
 """
@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import date, datetime, timedelta, timezone
 
-TOKYO_ZONE = ZoneInfo("Asia/Tokyo")
+# Tokyo has used UTC+09:00 year-round since 1951. A fixed offset avoids
+# depending on the optional IANA tzdata package on Windows Python installs.
+TOKYO_ZONE = timezone(timedelta(hours=9), name="Asia/Tokyo")
 _PERIOD_KEY_RE = re.compile(r"^(?P<year>\d{4})[-/](?P<issue>\d{1,3})$")
 
 
