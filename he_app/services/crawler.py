@@ -4,13 +4,14 @@ import requests
 
 from he_app.domain.errors import SiteScrapeFailure
 from he_app.domain.models import Site
-from he_app.fetch.browser import BrowserClient, BrowserPool
+from he_app.fetch.browser import BrowserClient, BrowserPool, close_browser_safely
 from he_app.fetch.http import create_session
 from he_app.services.adaptive_fetch import (
     collect_http_documents,
     collect_special_documents,
     try_http_current,
 )
+from he_app.services.browser_policy import runtime_click_first, runtime_requires_browser
 from he_app.services.document_sources import requires_browser
 from he_app.services.single_period import evaluate_site_period
 
@@ -47,6 +48,10 @@ def build_mirror_url_map(sites: list[Site], limit: int) -> dict[int, list[str]]:
     return {i: build_mirror_urls(site, sites, limit) for i, site in enumerate(sites)}
 
 
+def _runtime_browser_required(site: Site) -> bool:
+    return runtime_requires_browser(site, requires_browser)
+
+
 def _scrape_exact_site(
     session: requests.Session,
     site: Site,
@@ -56,33 +61,50 @@ def _scrape_exact_site(
 ) -> tuple[str | None, str, list[str], str | None]:
     """Run the unchanged strict parser for exactly one issue number."""
 
+    special_failure: SiteScrapeFailure | None = None
     try:
         documents = collect_special_documents(session, site, timeout, period)
     except SiteScrapeFailure as exc:
-        return None, exc.reason, [], exc.category
+        # A few verified client-rendered pages expose only an HTTP shell.  When
+        # the scheduler supplied a browser for one of those exact site IDs,
+        # retain the HTTP failure only as fallback and render the same URL.
+        if browser is not None and _runtime_browser_required(site):
+            special_failure = exc
+            documents = None
+        else:
+            return None, exc.reason, [], exc.category
     if documents is not None:
         return evaluate_site_period(site, period, documents)
 
-    if site.browser:
-        # A browser flag means browser is allowed/needed as fallback, not that
-        # a heavyweight driver must be the first transport. Accept HTTP only
-        # after the unchanged strict parser proves exact period + direction.
-        try:
-            probed = try_http_current(session, site, period, min(timeout, 8))
-        except Exception:
-            probed = None
-        if probed is not None:
-            _documents, evaluation = probed
-            return evaluation
+    browser_required = _runtime_browser_required(site)
+    if browser_required:
         if browser is None:
+            if special_failure is not None:
+                return None, special_failure.reason, [], special_failure.category
             raise RuntimeError("browser client is required")
+
+        # Browser-capable sites still probe HTTP first unless their dedicated
+        # HTTP collector already proved that the page shell cannot locate the
+        # target.  HTTP is accepted only after the unchanged strict parser
+        # proves exact period + configured physical direction.
+        if special_failure is None:
+            try:
+                probed = try_http_current(session, site, period, min(timeout, 8))
+            except Exception:
+                probed = None
+            if probed is not None:
+                _documents, evaluation = probed
+                return evaluation
+
         documents = browser.get_documents(
             site.url,
             period,
-            site.click_first,
+            runtime_click_first(site),
             timeout,
         )
     else:
+        if special_failure is not None:
+            return None, special_failure.reason, [], special_failure.category
         documents = collect_http_documents(session, site, timeout)
     return evaluate_site_period(site, period, documents)
 
@@ -154,7 +176,7 @@ def scrape_parallel_site(
     browser_pool: BrowserPool | None = None,
 ) -> Outcome:
     try:
-        if requires_browser(site):
+        if _runtime_browser_required(site):
             owns_pool = browser_pool is None
             pool = browser_pool or BrowserPool(1, headless=not show_browser)
             if owns_pool:
@@ -173,14 +195,46 @@ def scrape_parallel_site(
         return index, site, None, "", f"{type(exc).__name__}: {exc}", [], None
 
 
+def _is_renderer_timeout(exc: BaseException) -> bool:
+    return (
+        type(exc).__name__ == "TimeoutException"
+        and "Timed out receiving message from renderer" in str(exc)
+    )
+
+
+def _restart_browser(browser: BrowserClient) -> None:
+    close_browser_safely(browser)
+    browser.start()
+
+
 def scrape_browser_site(
     session: requests.Session, site: Site, period: int, timeout: int, browser: BrowserClient
 ) -> tuple[str | None, str, str | None, list[str], str | None]:
-    try:
-        result, detail, rank_values, previous_reason = scrape_site_with_browser(session, site, period, timeout, browser)
-        return result, detail, None, rank_values, previous_reason
-    except Exception as exc:
-        return None, "", f"{type(exc).__name__}: {exc}", [], None
+    for attempt in range(2):
+        try:
+            result, detail, rank_values, previous_reason = scrape_site_with_browser(
+                session, site, period, timeout, browser
+            )
+            return result, detail, None, rank_values, previous_reason
+        except Exception as exc:
+            # Chrome occasionally reports a renderer IPC timeout on a healthy
+            # page.  Only this exact transport failure gets one clean-browser
+            # retry.  Parser/direction/identity failures are never retried or
+            # relaxed, and partial DOM from the failed renderer is discarded.
+            if attempt == 0 and _is_renderer_timeout(exc):
+                try:
+                    _restart_browser(browser)
+                except Exception as restart_exc:
+                    return (
+                        None,
+                        "",
+                        f"{type(restart_exc).__name__}: {restart_exc}",
+                        [],
+                        None,
+                    )
+                continue
+            return None, "", f"{type(exc).__name__}: {exc}", [], None
+    return None, "", "RuntimeError: 浏览器重试状态异常", [], None
 
 
 def invoke_browser_scrape(
