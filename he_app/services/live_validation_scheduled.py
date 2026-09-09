@@ -80,20 +80,23 @@ def run_live_validation(
     browser_workers: int = 3,
     timeout: int,
     hard_timeout: float,
+    browser_hard_timeout: float = 130.0,
     progress: bool = True,
 ):
     """Validate all sites while preventing browser overcommit.
 
-    HTTP/API/list sites retain the requested worker count. Sites that may
-    launch Selenium are isolated into a second pool capped at three workers,
-    matching the production browser pool ceiling. Each site still has its own
-    hard deadline and unchanged strict parsing/period/direction rules.
+    HTTP/API/list sites retain the requested worker count and HTTP hard
+    deadline. Sites that may launch Selenium are isolated into a second pool
+    capped at three workers with an independent browser hard deadline. Parsing,
+    period, direction, source and value-count rules remain unchanged.
     """
 
     if workers < 1:
         raise ValueError("workers must be positive")
     if browser_workers < 1:
         raise ValueError("browser_workers must be positive")
+    if hard_timeout <= 0 or browser_hard_timeout <= 0:
+        raise ValueError("hard timeouts must be positive")
 
     http_jobs, browser_jobs = _partition_jobs(sites, context, timeout)
     site_by_key = {
@@ -101,8 +104,9 @@ def run_live_validation(
     }
     if progress:
         print(
-            f"[LIVE POOLS] http={len(http_jobs)} workers={workers}; "
-            f"browser={len(browser_jobs)} workers={min(browser_workers, 3)}",
+            f"[LIVE POOLS] http={len(http_jobs)} workers={workers} hard={hard_timeout:g}s; "
+            f"browser={len(browser_jobs)} workers={min(browser_workers, 3)} "
+            f"hard={browser_hard_timeout:g}s",
             flush=True,
         )
 
@@ -123,7 +127,7 @@ def run_live_validation(
             site_by_key=site_by_key,
             total_sites=len(sites),
             max_workers=min(browser_workers, 3),
-            hard_timeout=hard_timeout,
+            hard_timeout=browser_hard_timeout,
             progress=progress,
         )
     )
@@ -184,6 +188,7 @@ def build_arg_parser():
     parser.add_argument("--browser-workers", type=int, default=3)
     parser.add_argument("--timeout", type=int, default=20)
     parser.add_argument("--hard-timeout", type=float, default=90.0)
+    parser.add_argument("--browser-hard-timeout", type=float, default=130.0)
     parser.add_argument("--sites", default=SITES_FILE)
     parser.add_argument("--output-dir", default="live-validation")
     parser.add_argument("--require-all-current", action="store_true")
@@ -196,6 +201,8 @@ def run(args):
         raise SystemExit("fixed cycle mode requires --cycle-length")
     if args.browser_workers < 1:
         raise SystemExit("--browser-workers 必须大于0")
+    if args.hard_timeout <= 0 or args.browser_hard_timeout <= 0:
+        raise SystemExit("硬超时必须大于0")
 
     context = PeriodContext(
         PeriodKey(args.cycle, args.period),
@@ -210,6 +217,7 @@ def run(args):
         browser_workers=args.browser_workers,
         timeout=args.timeout,
         hard_timeout=args.hard_timeout,
+        browser_hard_timeout=args.browser_hard_timeout,
     )
     report = build_live_report(sites, context, results)
     json_path, markdown_path = write_live_report(Path(args.output_dir), report)
