@@ -1,0 +1,32 @@
+name: Export source snapshot
+
+on:
+  push:
+    branches:
+      - fix/production-completion-20260909
+    paths:
+      - .github/workflows/export-source.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Record source identity
+        shell: bash
+        run: |
+          printf '%s\n' "${GITHUB_SHA}" > SOURCE_COMMIT.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: production-completion-source
+          path: |
+            .
+            !.git/**
+          include-hidden-files: true
+          retention-days: 3
