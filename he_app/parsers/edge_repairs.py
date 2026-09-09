@@ -8,7 +8,6 @@ from he_app.domain.models import Candidate, Site
 from he_app.domain.policies import normalize_digit_text, normalize_pick, normalize_text
 from he_app.parsers.common import (
     current_candidates_outside_window,
-    has_kill_sum_keyword,
     trusted_candidate_with_conflict,
 )
 from he_app.parsers.dedicated.tables import format_success_result
