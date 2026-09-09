@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   diagnose:
-    name: diagnose-${{ matrix.name }}
+    name: browser-${{ matrix.name }}
     runs-on: windows-latest
     timeout-minutes: 12
     strategy:
@@ -33,20 +33,18 @@ jobs:
           python-version: '3.13'
       - name: Install
         run: python -m pip install -e ".[browser,test]"
-      - name: Diagnose exact site
+      - name: Force real browser page and summarize
         shell: pwsh
         run: |
           @'
-          import io, json, os, re
-          from contextlib import redirect_stdout, redirect_stderr
+          import json, os, re
           from pathlib import Path
           from bs4 import BeautifulSoup
           from he_app.config.sites import load_sites
           from he_app.fetch.http import create_session, build_host_locks
           from he_app.fetch.browser import BrowserClient, close_browser_safely
-          from he_app.services.adaptive_fetch import collect_http_documents, collect_special_documents
-          from he_app.services.browser_policy import runtime_requires_browser, runtime_click_first
-          from he_app.services.document_sources import requires_browser
+          from he_app.services.adaptive_fetch import collect_special_documents
+          from he_app.services.browser_policy import runtime_click_first
           from he_app.services.single_period import evaluate_site_period
 
           name=os.environ['TARGET_NAME']
@@ -55,39 +53,34 @@ jobs:
           if len(subset)!=1: raise SystemExit(f'expected one site for {name}, got {len(subset)}')
           Path('one-site.json').write_text(json.dumps(subset,ensure_ascii=False,indent=2),encoding='utf-8')
           site=load_sites(Path('one-site.json'))[0]
-          out=[]
-          out.append(f'SITE={site.name}\tID={site.site_id}\tPICK={site.pick}\tURL={site.url}')
+          out=[f'SITE={site.name}\tID={site.site_id}\tPICK={site.pick}\tURL={site.url}']
 
-          # Run the real production entry point, but keep its verbose output out of the evidence file.
-          import subprocess, sys
-          cp=subprocess.run([sys.executable,'he_crawler.py','--period','252','--sites','one-site.json','--workers','1','--timeout','30','--hard-timeout','120','--browser-hard-timeout','160','--success','one-success.txt','--fail','one-fail.txt','--no-fingerprint-cache-sync'],text=True,encoding='utf-8',errors='replace',capture_output=True,timeout=190)
-          success=Path('one-success.txt').read_text(encoding='utf-8-sig') if Path('one-success.txt').exists() else ''
-          fail=Path('one-fail.txt').read_text(encoding='utf-8-sig') if Path('one-fail.txt').exists() else ''
-          result_line=next((x.strip() for x in success.splitlines() if re.match(r'^(?:0[1-9]|1[0-3])合',x.strip())), '')
-          fail_line=next((x.strip() for x in fail.splitlines() if x.strip().startswith('失败 ')), '')
-          out.append('PRODUCTION='+(result_line or fail_line or f'exit={cp.returncode}'))
-
-          docs=[]; transport=[]; browser=None
+          # If a special collector discovers the current article URL, render that exact URL.
+          target_url=site.url
           host_locks=build_host_locks([site])
           with create_session(host_locks) as session:
               try:
                   special=collect_special_documents(session,site,30,252)
-                  if special is not None:
-                      docs=list(special); transport.append(f'SPECIAL:{len(docs)}')
-              except Exception as exc: transport.append(f'SPECIAL_ERR:{type(exc).__name__}:{exc}')
-              if not docs:
-                  try:
-                      docs=list(collect_http_documents(session,site,30)); transport.append(f'HTTP:{len(docs)}')
-                  except Exception as exc: transport.append(f'HTTP_ERR:{type(exc).__name__}:{exc}')
-              if runtime_requires_browser(site,requires_browser):
-                  try:
-                      browser=BrowserClient(headless=True); browser.start()
-                      bdocs=browser.get_documents(site.url,252,runtime_click_first(site),30)
-                      if bdocs: docs=list(bdocs); transport.append(f'BROWSER:{len(docs)}')
-                  except Exception as exc: transport.append(f'BROWSER_ERR:{type(exc).__name__}:{exc}')
-                  finally:
-                      if browser is not None: close_browser_safely(browser)
-          out.append('TRANSPORT='+' | '.join(transport))
+                  if special:
+                      sd=list(special)
+                      if sd and getattr(sd[0],'source_url',None):
+                          target_url=sd[0].source_url
+                          out.append(f'SPECIAL_TARGET={target_url}')
+              except Exception as exc:
+                  out.append(f'SPECIAL_DISCOVERY_ERR={type(exc).__name__}:{exc}')
+
+          docs=[]; browser=None
+          try:
+              browser=BrowserClient(headless=True); browser.start()
+              # Discovered detail pages are already exact; only use click_first on the configured landing URL.
+              click_first=runtime_click_first(site) if target_url==site.url else False
+              docs=list(browser.get_documents(target_url,252,click_first,45) or [])
+              out.append(f'BROWSER_DOCS={len(docs)} TARGET={target_url}')
+          except Exception as exc:
+              out.append(f'BROWSER_ERR={type(exc).__name__}:{exc}')
+          finally:
+              if browser is not None: close_browser_safely(browser)
+
           for period in (252,253):
               try: out.append(f'EVAL_{period}={evaluate_site_period(site,period,docs) if docs else (None,"no docs",[],None)}')
               except Exception as exc: out.append(f'EVAL_{period}_ERR={type(exc).__name__}:{exc}')
@@ -97,24 +90,28 @@ jobs:
               text=soup.get_text('\n',strip=True) or str(doc)
               return [re.sub(r'\s+',' ',x).strip() for x in text.splitlines() if x.strip()]
           evidence=[]
-          for di,doc in enumerate(docs[:4]):
+          for di,doc in enumerate(docs[:3]):
               lines=lines_of(doc)
+              out.append(f'DOC{di}_LINES={len(lines)} SOURCE={getattr(doc,"source_url","")}')
               for i,line in enumerate(lines):
                   if re.search(r'(?<!\d)(?:252|253)\s*期',line):
-                      chunk=' || '.join(lines[max(0,i-1):min(len(lines),i+2)])[:900]
+                      chunk=' || '.join(lines[max(0,i-2):min(len(lines),i+3)])[:1200]
                       if chunk not in evidence: evidence.append(chunk)
-              strict=[line[:500] for line in lines if re.search(r'(?:绝|絕)\s*(?:杀|殺)\s*一\s*合|(?:杀|殺)\s*一\s*合|(?:杀|殺)\s*合',line)]
+              strict=[line[:600] for line in lines if re.search(r'(?:绝|絕)\s*(?:杀|殺)\s*一\s*合|(?:杀|殺)\s*一\s*合|(?:杀|殺)\s*合',line)]
               if strict:
-                  out.append(f'DOC{di}_STRICT_FIRST={strict[:2]}')
-                  out.append(f'DOC{di}_STRICT_LAST={strict[-2:]}')
-          for idx,chunk in enumerate(evidence[:10],1): out.append(f'EVIDENCE{idx}={chunk}')
+                  out.append(f'DOC{di}_STRICT_FIRST={strict[:3]}')
+                  out.append(f'DOC{di}_STRICT_LAST={strict[-3:]}')
+          for idx,chunk in enumerate(evidence[:15],1): out.append(f'EVIDENCE{idx}={chunk}')
+          if not evidence: out.append('NO_252_253_BROWSER_EVIDENCE')
           Path('summary.txt').write_text('\n'.join(out)+'\n',encoding='utf-8')
           print('\n'.join(out))
           '@ | python -
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: summary-${{ matrix.name }}
           path: summary.txt
+          if-no-files-found: warn
           retention-days: 3
 
   aggregate:
