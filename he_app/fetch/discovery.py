@@ -61,6 +61,14 @@ def collect_page_documents(
     return documents, page_html
 
 
-def collect_documents(session: requests.Session, url: str, timeout: int) -> list[str]:
-    documents, _page_html = collect_page_documents(session, url, timeout)
+def collect_documents(
+    session: requests.Session,
+    url: str,
+    timeout: int,
+    *,
+    allow_inline_decode: bool = False,
+) -> list[str]:
+    documents, _page_html = collect_page_documents(
+        session, url, timeout, decode_inline=allow_inline_decode
+    )
     return documents

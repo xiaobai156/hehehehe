@@ -13,6 +13,8 @@ class SourceDocument(str):
         record_id: str | None = None,
         authority_id: str = "legacy",
         document_id: str = "",
+        peer_ip: str = "",
+        resolved_addresses: tuple[str, ...] = (),
     ):
         instance = super().__new__(cls, text)
         instance.source_url = source_url
@@ -22,6 +24,8 @@ class SourceDocument(str):
         instance.record_id = record_id
         instance.authority_id = authority_id or "legacy"
         instance.document_id = document_id or instance.authority_id
+        instance.peer_ip = peer_ip
+        instance.resolved_addresses = tuple(resolved_addresses)
         return instance
 
 
