@@ -199,14 +199,12 @@ def _cached_site_identity(item: dict, index: int) -> Site:
         raise FingerprintCacheError(f"指纹缓存第{index}个站点文本字段类型错误")
     if type(item["browser"]) is not bool or type(item["click_first"]) is not bool:
         raise FingerprintCacheError(f"指纹缓存第{index}个站点布尔字段类型错误")
-    expected_count = 2 if item["id"] == "s085_kcvpleh" else 1
-    value_count = item.get("value_count", expected_count)
-    if type(value_count) is not int or value_count != expected_count:
+    legacy_default = 2 if item["id"] == "s085_kcvpleh" else 1
+    value_count = item.get("value_count", legacy_default)
+    if type(value_count) is not int or value_count not in {1, 2}:
         raise FingerprintCacheError(
             f"指纹缓存第{index}个站点 value_count 与站点数据契约不一致"
         )
-    if item.get("top_period_exception") is not None:
-        raise FingerprintCacheError("不支持期数方向例外 top_period_exception")
     if not item["id"].strip() or not item["name"].strip() or not item["url"].strip():
         raise FingerprintCacheError(f"指纹缓存第{index}个站点身份为空")
     if item["pick"] not in {"top", "bottom"}:

@@ -15,6 +15,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 
 from he_app.domain.models import Site
+from he_app.domain.errors import SiteScrapeFailure
 from he_app.fetch.url_policy import StrictNetworkPolicy, same_origin_url, url_origin
 
 DEFAULT_HEADERS = {
@@ -70,7 +71,7 @@ def fetch_text(session: requests.Session, url: str, timeout: int) -> str:
             return fetch_text_fast(session, url, timeout)
         except (requests.exceptions.SSLError, requests.exceptions.Timeout):
             raise
-        except requests.exceptions.ConnectionError:
+        except (requests.exceptions.ConnectionError, SiteScrapeFailure):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError("HTTP请求预算已耗尽")

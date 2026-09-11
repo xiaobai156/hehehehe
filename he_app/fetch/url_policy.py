@@ -7,12 +7,19 @@ limits provide the deadline for DNS and socket operations themselves.
 from __future__ import annotations
 
 import ipaddress
+import json
 import socket
+from urllib.parse import quote
+from urllib.request import ProxyHandler, Request, build_opener
 from dataclasses import dataclass
 from typing import Iterable
 from urllib.parse import urljoin, urlsplit
 
 from he_app.domain.errors import SiteScrapeFailure
+
+
+_DOH_OPENER = build_opener(ProxyHandler({}))
+_SYNTHETIC_DNS_NETWORK = ipaddress.ip_network("198.18.0.0/15")
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +42,46 @@ def _validated_public_ip(raw: str, *, context: str) -> str:
     if not address.is_global:
         raise SiteScrapeFailure("站点身份错误", f"{context}解析到非公网地址: {address}")
     return address.compressed
+
+
+def _is_synthetic_dns_address(raw: str) -> bool:
+    try:
+        return ipaddress.ip_address(raw.split("%", 1)[0]) in _SYNTHETIC_DNS_NETWORK
+    except ValueError:
+        return False
+
+
+def _resolve_public_via_doh(host: str) -> tuple[str, ...]:
+    """Use public DNS only when the local resolver returns the proxy fake range."""
+    pending = [host]
+    seen: set[str] = set()
+    addresses: list[str] = []
+    while pending and len(seen) < 5:
+        name = pending.pop(0).rstrip(".").lower()
+        if name in seen:
+            continue
+        seen.add(name)
+        request = Request(
+            f"https://dns.google/resolve?name={quote(name)}&type=A",
+            headers={"Accept": "application/dns-json", "User-Agent": "he-crawler/1"},
+        )
+        try:
+            with _DOH_OPENER.open(request, timeout=5) as response:
+                payload = json.loads(response.read(256 * 1024).decode("utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise SiteScrapeFailure("请求失败", f"公共DNS解析失败: {host}: {exc}") from exc
+        for answer in payload.get("Answer", ()):
+            record_type = answer.get("type")
+            value = str(answer.get("data", "")).rstrip(".")
+            if record_type == 1:
+                address = _validated_public_ip(value, context=f"公共DNS {host}")
+                if address not in addresses:
+                    addresses.append(address)
+            elif record_type == 5 and value and value not in seen:
+                pending.append(value)
+    if not addresses:
+        raise SiteScrapeFailure("请求失败", f"公共DNS没有返回可用公网地址: {host}")
+    return tuple(addresses)
 
 
 def url_origin(url: str) -> tuple[str, str, int]:
@@ -88,11 +135,17 @@ def resolve_public_origin(url: str) -> ResolvedOrigin:
         raise SiteScrapeFailure("请求失败", f"DNS解析失败: {host}: {exc}") from exc
 
     addresses: list[str] = []
+    synthetic_dns = False
     for _family, _socktype, _proto, _canonname, sockaddr in records:
         raw = str(sockaddr[0])
+        if _is_synthetic_dns_address(raw):
+            synthetic_dns = True
+            continue
         address = _validated_public_ip(raw, context=f"DNS {host}")
         if address not in addresses:
             addresses.append(address)
+    if synthetic_dns and not addresses:
+        addresses.extend(_resolve_public_via_doh(host))
     if not addresses:
         raise SiteScrapeFailure("请求失败", f"DNS没有返回可用公网地址: {host}")
     return ResolvedOrigin(scheme, host, port, tuple(addresses))
