@@ -9,7 +9,13 @@ from he_app.domain.errors import SiteScrapeFailure
 from he_app.domain.models import Site, SourceDocument
 from he_app.domain.policies import normalize_digit_text, normalize_text
 from he_app.fetch.browser import BrowserClient
-from he_app.fetch.discovery import SCRIPT_RE, collect_documents, collect_page_documents, decode_strdecode_blocks
+from he_app.fetch.discovery import (
+    SCRIPT_RE,
+    collect_documents,
+    collect_page_documents,
+    decode_jgr_blocks,
+    decode_strdecode_blocks,
+)
 from he_app.fetch.http import fetch_text
 from he_app.parsers.common import (
     extract_values,
@@ -263,6 +269,34 @@ def collect_yidianhong_documents(session: requests.Session, url: str, timeout: i
     return documents
 
 
+def collect_zhanchi_documents(session: requests.Session, site: Site, timeout: int) -> list[str]:
+    documents, page_html = collect_page_documents(session, site.url, timeout)
+    for script_url in SCRIPT_RE.findall(page_html):
+        if not re.search(r"/js-\d+-\d+", script_url):
+            continue
+        full_url = urljoin(site.url, script_url)
+        script_text = fetch_text(session, full_url, min(timeout, 10))
+        decoded = decode_jgr_blocks(script_text)
+        if not decoded:
+            continue
+        joined = "\n".join(decoded)
+        if site.name not in joined or "绝杀一合" not in joined:
+            continue
+        documents.append(
+            SourceDocument(
+                joined,
+                source_url=full_url,
+                fetch_kind="script-decoded",
+                document_type="decoded",
+                parent_url=site.url,
+                authority_id=f"script:{full_url}:decoded",
+                document_id=f"script:{full_url}:decoded",
+            )
+        )
+        break
+    return documents
+
+
 def forum_api_url(url: str) -> str | None:
     parsed = urlparse(url)
     base_url = f"{parsed.scheme}://{parsed.netloc}"
@@ -418,6 +452,8 @@ def collect_special_site_documents(
         return collect_dynamic_home_topic_documents(session, site, timeout, period)
     if site.site_id == "s070_topic_246762" and not site.browser:
         return collect_yidianhong_documents(session, site.url, timeout)
+    if site.site_id == "s149_zhanchi":
+        return collect_zhanchi_documents(session, site, timeout)
     if forum_api_url(site.url) is not None:
         return collect_forum_api_documents(session, site.url, timeout)
     return None

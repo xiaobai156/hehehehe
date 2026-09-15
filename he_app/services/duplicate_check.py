@@ -9,6 +9,7 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
+import re
 from urllib.parse import urlparse
 
 import requests
@@ -236,6 +237,9 @@ def load_fingerprint_cache(path: Path, period: int, periods: int) -> tuple[list[
     errors: dict[int, str] = {}
     used_ids: set[str] = set()
     minimum_period = base_period - stored_periods + 1
+    cycle_year = data.get("cycle_year")
+    if cycle_year is not None and (type(cycle_year) is not int or cycle_year < 1):
+        raise ValueError("指纹缓存 cycle_year 非法")
 
     for item_index, item in enumerate(raw_sites, start=1):
         if not isinstance(item, dict):
@@ -287,8 +291,12 @@ def load_fingerprint_cache(path: Path, period: int, periods: int) -> tuple[list[
         normalized_fingerprint: Fingerprint = {}
         for raw_period, raw_value in raw_fingerprint.items():
             if not str(raw_period).isdigit() or not isinstance(raw_value, str):
-                raise ValueError(f"指纹缓存第{item_index}个站点存在非法期数或合数")
-            current_period = int(raw_period)
+                match = re.fullmatch(r"(\d{4})-(\d{1,3})", str(raw_period))
+                if not match or cycle_year is None or int(match.group(1)) != cycle_year:
+                    raise ValueError(f"指纹缓存第{item_index}个站点存在非法期数或合数")
+                current_period = int(match.group(2))
+            else:
+                current_period = int(raw_period)
             values = raw_value.split(",")
             if not minimum_period <= current_period <= base_period:
                 raise ValueError(f"指纹缓存第{item_index}个站点包含窗口外期数: {current_period}")
@@ -895,4 +903,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

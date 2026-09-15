@@ -1,5 +1,7 @@
 import base64
+import json
 import re
+import zlib
 
 import requests
 
@@ -10,6 +12,7 @@ from .http import fetch_text
 
 SCRIPT_RE = re.compile(r"<script\b[^>]*\bsrc=[\"']([^\"']+)[\"']", re.I)
 STRDECODE_RE = re.compile(r"strdecode\(\s*[\"']([^\"']+)[\"']\s*\)", re.I)
+JGR_RE = re.compile(r"__jGr\s*=\s*'(.+?)';\s*var\s+obj\s*=\s*JSON\.parse", re.S)
 
 
 def decode_strdecode_blocks(text: str) -> list[str]:
@@ -23,6 +26,18 @@ def decode_strdecode_blocks(text: str) -> list[str]:
         except Exception:
             continue
     return decoded
+
+
+def decode_jgr_blocks(text: str) -> list[str]:
+    match = JGR_RE.search(text)
+    if not match:
+        return []
+    try:
+        payload = json.loads(match.group(1))
+        tokens = payload.get("_v54gOM", [])
+        return [zlib.decompress(base64.b64decode(token), -15).decode("utf-8") for token in tokens]
+    except (ValueError, TypeError, zlib.error, UnicodeDecodeError):
+        return []
 
 
 def collect_page_documents(

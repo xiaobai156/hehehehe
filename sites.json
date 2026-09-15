@@ -1116,5 +1116,13 @@
     "pick": "top",
     "browser": true,
     "click_first": false
+  },
+  {
+    "id": "s149_zhanchi",
+    "name": "展翅飞翔",
+    "url": "https://dh81163.2cv5a08j69.cyou/nmWigH7bLp.html",
+    "pick": "bottom",
+    "browser": false,
+    "click_first": false
   }
 ]
