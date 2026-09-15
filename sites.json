@@ -1124,5 +1124,13 @@
     "pick": "bottom",
     "browser": false,
     "click_first": false
+  },
+  {
+    "id": "s150_gsb_18",
+    "name": "运河东新",
+    "url": "https://sds18.www83739b.com:8443/gsb/18.html",
+    "pick": "bottom",
+    "browser": false,
+    "click_first": false
   }
 ]
