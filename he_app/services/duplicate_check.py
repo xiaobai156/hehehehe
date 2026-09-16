@@ -215,6 +215,25 @@ def fingerprint_cache_lock(path: Path, timeout: float = 30.0):
         raise TimeoutError(f"缓存锁等待超过{timeout:g}秒: {path}") from exc
 
 
+_REPORTED_TRIMS: set[str] = set()
+
+
+def _notify_trimmed_fingerprints(
+    site_id: str, periods: list[int], base_period: int, stored_periods: int
+) -> None:
+    """Report trimmed history keys once per process (never a silent drop)."""
+
+    message = (
+        f"[缓存] 判重读取丢弃窗口外指纹 {len(periods)} 条: {site_id} "
+        f"{'/'.join(str(period) for period in sorted(set(periods)))}"
+        f"（基准 {base_period} 期，窗口 {stored_periods} 期）"
+    )
+    if message in _REPORTED_TRIMS:
+        return
+    _REPORTED_TRIMS.add(message)
+    print(message, flush=True)
+
+
 def load_fingerprint_cache(path: Path, period: int, periods: int) -> tuple[list[Site], dict[int, Fingerprint], dict[int, str]]:
     data = json.loads(path.read_text(encoding="utf-8-sig"))
     if not isinstance(data, dict):
@@ -289,6 +308,7 @@ def load_fingerprint_cache(path: Path, period: int, periods: int) -> tuple[list[
         if not isinstance(raw_fingerprint, dict):
             raise ValueError(f"指纹缓存第{item_index}个站点 fingerprint 不是对象")
         normalized_fingerprint: Fingerprint = {}
+        trimmed_periods: list[int] = []
         for raw_period, raw_value in raw_fingerprint.items():
             if not str(raw_period).isdigit() or not isinstance(raw_value, str):
                 match = re.fullmatch(r"(\d{4})-(\d{1,3})", str(raw_period))
@@ -299,7 +319,10 @@ def load_fingerprint_cache(path: Path, period: int, periods: int) -> tuple[list[
                 current_period = int(raw_period)
             values = raw_value.split(",")
             if not minimum_period <= current_period <= base_period:
-                raise ValueError(f"指纹缓存第{item_index}个站点包含窗口外期数: {current_period}")
+                # Outside the stored window: trim it here instead of aborting the
+                # whole duplicate check.  Genuine corruption still raises below.
+                trimmed_periods.append(current_period)
+                continue
             if (
                 len(values) != site.value_count
                 or len(set(values)) != len(values)
@@ -309,6 +332,8 @@ def load_fingerprint_cache(path: Path, period: int, periods: int) -> tuple[list[
                     f"指纹缓存第{item_index}个站点{current_period}期合数非法: {raw_value}"
                 )
             normalized_fingerprint[current_period] = raw_value
+        if trimmed_periods:
+            _notify_trimmed_fingerprints(site_id, trimmed_periods, base_period, stored_periods)
         fingerprint = trim_fingerprint(
             normalized_fingerprint,
             period,

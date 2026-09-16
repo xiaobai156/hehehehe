@@ -28,6 +28,24 @@ Outcome = tuple[Site, str | None, str, str | None, list[str], str | None]
 CACHE_UPDATE_SUCCESS_PERCENT = 85
 SCHEMA_VERSION = 2
 
+_REPORTED_NOTICES: set[str] = set()
+
+
+def _notice(message: str) -> None:
+    """Report a head/history inconsistency once per process.
+
+    These notices replace the former hard failures: an inconsistent cache head
+    or a history key outside the window is normalised/trimmed instead of
+    aborting the whole cache write.  Genuine corruption (malformed period
+    tokens, illegal values, conflicting values for one period, duplicate site
+    ids) still raises ``FingerprintCacheError``.
+    """
+
+    if message in _REPORTED_NOTICES:
+        return
+    _REPORTED_NOTICES.add(message)
+    print(f"[缓存] {message}", flush=True)
+
 
 def cache_site_key(site: Site) -> str:
     return site.site_id or " ".join(site.name.split())
@@ -47,24 +65,51 @@ def _is_cycle_schema(cache: Mapping[str, object]) -> bool:
 
 
 def _base_key(cache: Mapping[str, object], cycle_year: int | None = None) -> PeriodKey | None:
+    """Return the cache baseline, healing a head whose two fields disagree.
+
+    ``base_period_key`` stays authoritative for the cycle identity, but when it
+    disagrees with ``base_period`` inside the same cycle the later issue wins.
+    Taking the later one only widens the window, so no stored fingerprint is
+    pushed outside it by the healing itself; the next write persists the
+    normalised head, so the file becomes self-consistent again.
+    """
+
     raw_key = cache.get("base_period_key")
+    key: PeriodKey | None = None
     if raw_key:
         try:
-            return PeriodKey.parse(raw_key)
+            key = PeriodKey.parse(raw_key)
         except ValueError as exc:
             raise FingerprintCacheError(f"指纹缓存 base_period_key 非法: {raw_key}") from exc
     raw_period = cache.get("base_period", 0)
     if type(raw_period) is not int or raw_period < 0:
+        if key is not None:
+            return key
         raise FingerprintCacheError("指纹缓存 base_period 非法")
     if raw_period == 0:
-        return None
+        return key
     year = cycle_year or cache.get("cycle_year")
     if type(year) is not int:
         year = infer_legacy_cycle_year(cache.get("updated_at"))
     try:
-        return PeriodKey(int(year), raw_period)
+        field_key = PeriodKey(int(year), raw_period)
     except ValueError as exc:
         raise FingerprintCacheError(f"指纹缓存基准期非法: {year}-{raw_period}") from exc
+    if key is None or key == field_key:
+        return field_key if key is None else key
+    if key.cycle_year != field_key.cycle_year:
+        _notice(
+            "基准期字段跨周期不一致"
+            f"（base_period_key={key.cache_key} base_period={field_key.cache_key}），沿用 base_period_key"
+        )
+        return key
+    newer = max(key, field_key)
+    _notice(
+        "基准期字段不一致"
+        f"（base_period_key={key.cache_key} base_period={field_key.cache_key}），"
+        f"按较晚期 {newer.cache_key} 归一化"
+    )
+    return newer
 
 
 
@@ -80,16 +125,20 @@ def _parse_period_token(
     *,
     base: PeriodKey,
     periods: int,
-) -> PeriodKey:
+) -> PeriodKey | None:
+    """Decode one stored period token.
+
+    Returns ``None`` when the token is well formed but resolves outside the
+    current window: the caller trims it (with a notice) instead of failing the
+    whole cache write.  Malformed tokens still raise.
+    """
+
     text = str(raw).strip()
     try:
         if "-" in text or "/" in text:
             return PeriodKey.parse(text)
         if text.isdigit():
-            resolved = resolve_issue_in_window(int(text), base, periods)
-            if resolved is None:
-                raise ValueError("裸期数不在缓存窗口")
-            return resolved
+            return resolve_issue_in_window(int(text), base, periods)
     except ValueError as exc:
         raise FingerprintCacheError(f"非法缓存期数键: {raw}") from exc
     raise FingerprintCacheError(f"非法缓存期数键: {raw}")
@@ -119,10 +168,12 @@ def _fingerprint_as_keys(
         raise FingerprintCacheError("fingerprint 不是对象")
     allowed = set(period_window(base, periods))
     result: dict[PeriodKey, str] = {}
+    dropped: list[str] = []
     for raw_period, raw_value in raw.items():
         key = _parse_period_token(raw_period, base=base, periods=periods)
-        if key not in allowed:
-            raise FingerprintCacheError(f"指纹包含窗口外期数: {key.cache_key}")
+        if key is None or key not in allowed:
+            dropped.append(key.cache_key if key is not None else str(raw_period).strip())
+            continue
         value = (
             _validate_value(site, raw_value, f"{key.cache_key}期")
             if site is not None
@@ -131,6 +182,12 @@ def _fingerprint_as_keys(
         if key in result and result[key] != value:
             raise FingerprintCacheError(f"同一期存在冲突指纹: {key.cache_key}")
         result[key] = value
+    if dropped:
+        _notice(
+            f"丢弃窗口外指纹 {len(dropped)} 条: {site.site_id if site is not None else '未知站点'}"
+            f" {'/'.join(sorted(set(dropped)))}"
+            f"（基准 {base.cache_key}，窗口 {periods} 期）"
+        )
     return dict(sorted(result.items(), reverse=True))
 
 
