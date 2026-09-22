@@ -21,6 +21,7 @@ Outcome = tuple[int, Site, str | None, str, str | None, list[str], str | None]
 MATCHED_PERIOD_PREFIX = "__matched_period__:"
 _RENDER_SPECIAL_DETAIL_SITE_IDS = frozenset(
     {
+        "s108_topic_1024380",  # 命中劫
         "s118_topic_1024655",  # 和风细雨
         "s119_topic_1024654",  # 新人旧梦
     }
@@ -130,8 +131,8 @@ def _scrape_exact_site(
     special_failure: SiteScrapeFailure | None = None
     try:
         documents = collect_special_documents(session, site, timeout, period)
-    except (TimeoutError, requests.exceptions.Timeout):
-        # The two dynamic authors share one column URL. Under concurrent live
+    except (TimeoutError, requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+        # Dynamic author sites may share one column URL. Under concurrent live
         # runs the strict HTTP discovery can exhaust its request budget even
         # though the rendered column is healthy. Render the same configured
         # column and repeat the exact name+issue+keyword+same-origin selection.
@@ -139,7 +140,10 @@ def _scrape_exact_site(
             rendered = _render_dynamic_index_detail(browser, site, period, timeout)
             if rendered is not None:
                 return evaluate_site_period(site, period, rendered)
-        raise
+        if browser is not None and _runtime_browser_required(site):
+            documents = None
+        else:
+            raise
     except SiteScrapeFailure as exc:
         if browser is not None and site.site_id in _RENDER_SPECIAL_DETAIL_SITE_IDS:
             # Never hide a real identity/candidate conflict. A plain "no post"

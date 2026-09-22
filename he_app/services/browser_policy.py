@@ -15,6 +15,8 @@ from he_app.parsers.policies import SITE_RULES
 # and wins when it independently passes all strict checks.
 BROWSER_RENDER_REQUIRED_SITE_IDS = frozenset(
     {
+        "s020_fklgrq",  # 学无止境 API shell
+        "s149_zhanchi",  # 展翅飞翔脚本页面
         # Earlier live-proven shells.
         "s051_topic_702074",  # 坐收其利
         "s065_topic_437721",  # 鸡飞蛋打
