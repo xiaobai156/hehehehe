@@ -39,6 +39,10 @@ from he_app.parsers.dedicated.gucheng import (
     GUCHENG_SITE_ID,
     find_gucheng_kill_sum_candidate_with_direction,
 )
+from he_app.parsers.dedicated.chunhuidadi import (
+    SPRING_SITE_ID,
+    find_spring_kill_sum_candidate_with_direction,
+)
 from he_app.parsers.dedicated.article_content import (
     ARTICLE_CONTENT_SITE_IDS,
     find_article_content_candidate_with_direction,
@@ -344,6 +348,27 @@ def _parse_gucheng(site: Site, period: int, documents: list[str]) -> Evaluation:
     )
 
 
+def _parse_spring(site: Site, period: int, documents: list[str]) -> Evaluation:
+    candidate, outside_direction = find_spring_kill_sum_candidate_with_direction(
+        site, documents, period, site.pick
+    )
+    if candidate is not None:
+        return _success(site, period, candidate)
+    if outside_direction:
+        return (
+            None,
+            f"{site.name} {period}期不是尾部春回大地必杀二合边界行",
+            [],
+            "方向范围外",
+        )
+    return _missing(
+        site,
+        period,
+        "{site} 作者春回大地必杀二合专属块里没找到{period}期",
+        "无当期",
+    )
+
+
 def _parse_article_content(site: Site, period: int, documents: list[str]) -> Evaluation:
     candidate, outside_direction = find_article_content_candidate_with_direction(
         site, documents, period, normalize_pick(site.pick)
@@ -540,6 +565,7 @@ def build_registry() -> ParserRegistry:
         "s136_topic_677676": _parse_two_value_anchor,
         "s137_topic_682109": _parse_two_value_anchor,
         GUCHENG_SITE_ID: _parse_gucheng,
+        SPRING_SITE_ID: _parse_spring,
     }
     for site_id in ARTICLE_CONTENT_SITE_IDS:
         registrations[site_id] = _parse_article_content
@@ -573,6 +599,7 @@ WINDOW_PRECHECK_EXEMPT = {
     TTSS_YIKAO_SITE_ID,
     TTSS_CHENYUAN_SITE_ID,
     TTSS_QIFENG_SITE_ID,
+    SPRING_SITE_ID,
 }
 WINDOW_PRECHECK_EXEMPT.update(ARTICLE_CONTENT_SITE_IDS)
 

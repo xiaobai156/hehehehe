@@ -28,6 +28,11 @@ from he_app.parsers.dedicated.gucheng import (
     GUCHENG_ROW_RE,
     is_gucheng_kill_sum_row,
 )
+from he_app.parsers.dedicated.chunhuidadi import (
+    SPRING_SITE_ID,
+    is_spring_kill_sum_row,
+    spring_segment_is_bounded,
+)
 from he_app.parsers.dedicated.article_content import (
     ARTICLE_CONTENT_SITE_IDS,
     article_content_segment_is_bounded,
@@ -110,6 +115,9 @@ def _dedicated_document_keyword(site: Site, period: int, values: list[str], text
 
     if site.site_id == GUCHENG_SITE_ID and len(values) == 2:
         return "故城笙声杀2合数" if is_gucheng_kill_sum_row(text, period, values) else None
+
+    if site.site_id == SPRING_SITE_ID and len(values) == 2:
+        return "春回大地必杀二合" if is_spring_kill_sum_row(text, period, values) else None
 
     if site.site_id in ARTICLE_CONTENT_SITE_IDS and len(values) == 1:
         return (
@@ -205,6 +213,8 @@ def _detail_is_self_contained(site: Site, period: int, values: list[str], detail
     normalized = normalize_digit_text(normalize_text(detail))
     if site.site_id == BLACKPEPPER_SITE_ID and len(values) == 1:
         return is_blackpepper_row(normalized, period, values[0])
+    if site.site_id == SPRING_SITE_ID and len(values) == 2:
+        return is_spring_kill_sum_row(normalized, period, values)
     if not contains_exact_period(normalized, period):
         return False
     if _dedicated_document_keyword(site, period, values, normalized) is None:
@@ -256,6 +266,9 @@ def _special_segment_is_bounded(site_id: str, text: str, start: int, end: int) -
             and row.start() >= start
             and row.end() <= limit
         )
+
+    if site_id == SPRING_SITE_ID:
+        return spring_segment_is_bounded(text, start, end)
 
     if site_id in ARTICLE_CONTENT_SITE_IDS:
         return article_content_segment_is_bounded(site_id, text, start, end)
@@ -329,6 +342,7 @@ def build_document_evidence(
         "s073_shuqhbq",
         "s085_kcvpleh",
         GUCHENG_SITE_ID,
+        SPRING_SITE_ID,
         *ARTICLE_CONTENT_SITE_IDS,
     }
     evidence: list[CandidateEvidence] = []
@@ -410,7 +424,10 @@ def build_document_evidence(
 
         matched_segment: tuple[str, int, int] | None = None
         for segment, start, end in _candidate_segments(document, period):
-            if not all(_contains_sum_value(segment, value) for value in values):
+            if site.site_id == SPRING_SITE_ID:
+                if not is_spring_kill_sum_row(segment, period, values):
+                    continue
+            elif not all(_contains_sum_value(segment, value) for value in values):
                 continue
             if site.site_id not in synthetic_detail_sites:
                 if _dedicated_document_keyword(site, period, values, segment) is None:
