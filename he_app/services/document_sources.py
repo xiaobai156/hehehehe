@@ -275,7 +275,10 @@ def collect_zhanchi_documents(session: requests.Session, site: Site, timeout: in
         if not re.search(r"/js-\d+-\d+", script_url):
             continue
         full_url = urljoin(site.url, script_url)
-        script_text = fetch_text(session, full_url, min(timeout, 10))
+        # This decoded script is the site's only data source: the configured
+        # page is a JS shell, so a capped budget turns an occasionally slow
+        # response into a false "无当期". Keep the caller's full per-site budget.
+        script_text = fetch_text(session, full_url, timeout)
         decoded = decode_jgr_blocks(script_text)
         if not decoded:
             continue
