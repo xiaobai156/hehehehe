@@ -7,7 +7,9 @@ from queue import Full, Queue
 from threading import Lock, RLock, get_ident
 from typing import TypeVar
 
+from he_app.domain.errors import SiteScrapeFailure
 from he_app.domain.models import Site, SourceDocument
+from he_app.fetch.url_policy import same_origin_url
 
 
 T = TypeVar("T")
@@ -255,16 +257,22 @@ class BrowserClient:
     def _collect_documents_owner(self, url: str = "") -> list[str]:
         if self._page is None:
             return []
+        actual_url = self._page.url
+        if url:
+            same_origin_url(url, actual_url)
         try:
             body_text = self._page.locator("body").inner_text()
         except Exception:
             body_text = ""
-        state_id = f"browser:{url}:state:{self.capture_sequence}"
+        page_source = self._page.content()
+        if self._page.url != actual_url:
+            raise SiteScrapeFailure("站点身份错误", "采集过程中页面发生跳转，无法确认同一文档")
+        state_id = f"browser:{actual_url}:state:{self.capture_sequence}"
         self.capture_sequence += 1
         return [
             SourceDocument(
                 body_text,
-                source_url=url,
+                source_url=actual_url,
                 fetch_kind="browser",
                 document_type="body-text",
                 parent_url=url,
@@ -272,8 +280,8 @@ class BrowserClient:
                 document_id=f"{state_id}:body",
             ),
             SourceDocument(
-                self._page.content(),
-                source_url=url,
+                page_source,
+                source_url=actual_url,
                 fetch_kind="browser",
                 document_type="page-source",
                 parent_url=url,
