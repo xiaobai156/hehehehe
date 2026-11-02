@@ -17,6 +17,7 @@ from he_app.config.sites import load_sites
 from he_app.domain.models import Site
 from he_app.domain.periods import CyclePolicy, PeriodContext, PeriodKey, deserialize_period_mapping
 from he_app.services.live_validation import LiveSiteResult, run_live_validation
+from he_app.services.crawler import matched_period_from_reason
 from he_app.services.runner import _normalize_legacy_failures, build_arg_parser as build_legacy_arg_parser
 from he_app.storage.atomic_write import commit_text_transaction_unlocked, exclusive_path_lock
 from he_app.storage.cycle_cache import (
@@ -27,8 +28,6 @@ from he_app.storage.cycle_cache import (
     write_cycle_cache,
 )
 from he_app.storage.recent_cache import (
-    cache_update_allowed,
-    record_recent_cache_failures,
     update_recent_cache_from_outcomes,
 )
 from he_app.storage.reports import (
@@ -189,7 +188,12 @@ def run(args: argparse.Namespace) -> int:
         index: _result_to_outcome(site, result, args.period)
         for index, (site, result) in enumerate(zip(selected_sites, live_results, strict=True))
     }
-    success_count = sum(1 for outcome in outcomes.values() if outcome[1])
+    # 禁止跨期借值：计数与失败清单判定必须与 build_current_only_results 的落盘口径一致。
+    def _effective_success(outcome: Outcome) -> bool:
+        result, metadata = outcome[1], outcome[5]
+        return bool(result) and matched_period_from_reason(args.period, metadata) == args.period
+
+    success_count = sum(1 for outcome in outcomes.values() if _effective_success(outcome))
     total_count = len(selected_sites)
     success_rate = success_count / total_count * 100.0 if total_count else 0.0
 
@@ -213,7 +217,7 @@ def run(args: argparse.Namespace) -> int:
             successful_ids = {
                 site.site_id
                 for site, outcome in zip(selected_sites, outcomes.values(), strict=True)
-                if outcome[1]
+                if _effective_success(outcome)
             }
             failure_text = merge_failure_output(existing_failure, fail_lines, successful_ids)
         else:
@@ -227,23 +231,15 @@ def run(args: argparse.Namespace) -> int:
     cache_error: Exception | None = None
     if not args.no_fingerprint_cache_sync:
         try:
-            allowed = bool(args.retry_failures) or cache_update_allowed(success_count, total_count)
-            if allowed:
-                update_recent_cache_from_outcomes(
-                    Path(args.fingerprint_cache).resolve(),
-                    selected_sites,
-                    outcomes,
-                    args.period,
-                    10,
-                    bool(args.preserve_unconfigured_cache_sites),
-                )
-            else:
-                record_recent_cache_failures(
-                    Path(args.fingerprint_cache).resolve(),
-                    selected_sites,
-                    outcomes,
-                    args.period,
-                )
+            # 逐站写入（用户 2026-10-20 指令）：成功多少写多少，不再用 85% 门禁整批拦截。
+            update_recent_cache_from_outcomes(
+                Path(args.fingerprint_cache).resolve(),
+                selected_sites,
+                outcomes,
+                args.period,
+                10,
+                bool(args.preserve_unconfigured_cache_sites),
+            )
 
             cycle_path = Path(args.cycle_cache).resolve()
             cycle_state = load_cycle_cache(
@@ -258,8 +254,6 @@ def run(args: argparse.Namespace) -> int:
                 all_sites,
                 context,
             )
-            if not allowed:
-                fresh = {}
             merged, merged_errors = merge_cycle_fingerprints(
                 cycle_state,
                 fresh,

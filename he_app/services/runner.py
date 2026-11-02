@@ -35,13 +35,12 @@ from he_app.services.crawler import (
     scrape_parallel_site,
 )
 from he_app.services.isolation import IsolatedJobResult, run_isolated_site_jobs
+from he_app.validation.period import INVALID_MATCHED_PERIOD
 from he_app.storage.atomic_write import (
     commit_text_transaction_unlocked,
     exclusive_path_lock,
 )
 from he_app.storage.recent_cache import (
-    cache_update_allowed,
-    record_recent_cache_failures,
     update_recent_cache_from_outcomes,
 )
 from he_app.storage.reports import (
@@ -139,25 +138,28 @@ def _split_cache_outcomes_by_matched_period(
             if result
             else requested_period
         )
-        if result and matched_period == next_period:
+        # 禁止跨期借值（缓存侧）：只要命中期不是指定期，就绝不能按指定期写缓存。
+        # 命中「下一期」的仍按真实期号归档；其它异期一律降级为当期 miss。
+        if result and matched_period != requested_period:
             requested_outcomes[index] = (
                 site,
                 None,
                 detail,
                 None,
                 [],
-                f"已严格命中{next_period}期{site.pick}边界；不写入{requested_period}期缓存",
+                f"仅命中{matched_period}期，禁止跨期借值；不写入{requested_period}期缓存",
             )
-            next_index = len(next_sites)
-            next_sites.append(site)
-            next_outcomes[next_index] = (
-                site,
-                result,
-                detail,
-                error,
-                values,
-                None,
-            )
+            if matched_period == next_period:
+                next_index = len(next_sites)
+                next_sites.append(site)
+                next_outcomes[next_index] = (
+                    site,
+                    result,
+                    detail,
+                    error,
+                    values,
+                    None,
+                )
             continue
         requested_outcomes[index] = outcome
     return requested_outcomes, next_sites, next_outcomes, next_period
@@ -464,11 +466,17 @@ def run(args: argparse.Namespace) -> int:
             )
             outcomes[index] = outcome
             returned_site, result, detail, error, _values, metadata = outcome
-        if result and matched_period_from_reason(args.period, metadata) == args.period + 1:
-            next_period_successes.append(site.name)
+        # 禁止跨期借值：命中非指定期的结果按失败统计，与成功 TXT 的落盘判定保持一致，
+        # 避免控制台「成功数」和实际写入行数互相矛盾。
+        borrowed = result is not None and matched_period_from_reason(args.period, metadata) != args.period
+        if borrowed:
+            next_period_successes.append(
+                f"{site.name}(命中{matched_period_from_reason(args.period, metadata)}期)"
+            )
+        effective_success = bool(result) and not borrowed
         completed_count += 1
-        success_count += int(bool(result))
-        fail_count += int(not result)
+        success_count += int(effective_success)
+        fail_count += int(not effective_success)
         elapsed = next(
             (
                 value
@@ -477,11 +485,20 @@ def run(args: argparse.Namespace) -> int:
             ),
             0.0,
         )
+        if borrowed:
+            _matched = matched_period_from_reason(args.period, metadata)
+            borrow_detail = (
+                f"当期{args.period}期命中标记非法，禁止跨期借值"
+                if _matched == INVALID_MATCHED_PERIOD
+                else f"当期{args.period}期无严格候选；仅命中{_matched}期，禁止跨期借值"
+            )
+        else:
+            borrow_detail = detail
         print_outcome(
             site,
-            result,
-            detail,
-            error,
+            result if effective_success else None,
+            borrow_detail,
+            None if borrowed else error,
             format_progress_prefix(index, total_progress),
         )
         print(
@@ -503,9 +520,9 @@ def run(args: argparse.Namespace) -> int:
     print(f"[INFO] 成功率: {success_count}/{total_sites} ({success_rate:.2f}%)")
     if next_period_successes:
         print(
-            f"[INFO] {args.period + 1}期严格{sites[0].pick if len(sites) == 1 else '边界'}"
-            f"替代命中: {len(next_period_successes)} 个；"
-            f"仅在{args.period}期未能通过各站自身top/bottom边界时采用"
+            f"[INFO] 跨期借值已拦截: {len(next_period_successes)} 个（"
+            + "、".join(next_period_successes)
+            + f"）；这些站按{args.period}期失败处理，不进成功TXT与缓存"
         )
 
     success_lines, fail_lines, ranking_values, failure_categories = (
@@ -533,10 +550,11 @@ def run(args: argparse.Namespace) -> int:
             fail_path.read_text(encoding="utf-8-sig") if fail_path.exists() else ""
         )
         if args.append_success:
+            # 与成功 TXT 落盘共用同一判定：跨期借值结果不算成功，不从失败清单移除。
             successful_site_ids = {
                 site.site_id
-                for site, result, _detail, _error, _rank_values, _metadata in outcomes.values()
-                if result
+                for site, result, _detail, _error, _rank_values, metadata in outcomes.values()
+                if result and matched_period_from_reason(args.period, metadata) == args.period
             }
             failure_output = merge_failure_output(
                 _normalize_legacy_failures(existing_failure, configured_sites),
@@ -559,54 +577,47 @@ def run(args: argparse.Namespace) -> int:
     cache_updated = False
     if not args.no_fingerprint_cache_sync:
         try:
-            if args.retry_failures or cache_update_allowed(success_count, total_sites):
-                (
-                    requested_cache_outcomes,
+            # 逐站写入（用户 2026-10-20 指令）：不再用 85% 成功率门禁整批拦截，
+            # 成功多少写多少，失败站只记失败。
+            (
+                requested_cache_outcomes,
+                next_cache_sites,
+                next_cache_outcomes,
+                next_cache_period,
+            ) = _split_cache_outcomes_by_matched_period(
+                sites,
+                outcomes,
+                args.period,
+            )
+            update_recent_cache_from_outcomes(
+                fingerprint_cache_path,
+                sites,
+                requested_cache_outcomes,
+                args.period,
+                10,
+                args.preserve_unconfigured_cache_sites,
+                cycle_year=cycle_year,
+            )
+            if next_cache_sites:
+                next_key = period_key.next()
+                if (
+                    next_key.cycle_year != cycle_year
+                    or next_key.issue != next_cache_period
+                ):
+                    raise ValueError(
+                        "跨周期下一期不能隐式混入本期缓存；"
+                        "请使用新周期显式运行"
+                    )
+                update_recent_cache_from_outcomes(
+                    fingerprint_cache_path,
                     next_cache_sites,
                     next_cache_outcomes,
                     next_cache_period,
-                ) = _split_cache_outcomes_by_matched_period(
-                    sites,
-                    outcomes,
-                    args.period,
-                )
-                update_recent_cache_from_outcomes(
-                    fingerprint_cache_path,
-                    sites,
-                    requested_cache_outcomes,
-                    args.period,
                     10,
-                    args.preserve_unconfigured_cache_sites,
+                    True,
                     cycle_year=cycle_year,
                 )
-                if next_cache_sites:
-                    next_key = period_key.next()
-                    if (
-                        next_key.cycle_year != cycle_year
-                        or next_key.issue != next_cache_period
-                    ):
-                        raise ValueError(
-                            "跨周期下一期不能隐式混入本期缓存；"
-                            "请使用新周期显式运行"
-                        )
-                    update_recent_cache_from_outcomes(
-                        fingerprint_cache_path,
-                        next_cache_sites,
-                        next_cache_outcomes,
-                        next_cache_period,
-                        10,
-                        True,
-                        cycle_year=cycle_year,
-                    )
-                cache_updated = True
-            else:
-                record_recent_cache_failures(
-                    fingerprint_cache_path,
-                    sites,
-                    outcomes,
-                    args.period,
-                    cycle_year=cycle_year,
-                )
+            cache_updated = True
         except Exception as exc:
             cache_update_error = exc
             print(
@@ -625,11 +636,6 @@ def run(args: argparse.Namespace) -> int:
         return 1
     if cache_updated:
         print(f"重复检测指纹备份已同步: {fingerprint_cache_path}")
-    elif not args.no_fingerprint_cache_sync:
-        print(
-            f"缓存未推进：成功率 {success_rate:.2f}% 不超过 85%；"
-            f"失败站点已标记到 {fingerprint_cache_path}"
-        )
     return 0
 
 

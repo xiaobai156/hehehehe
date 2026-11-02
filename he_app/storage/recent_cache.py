@@ -25,7 +25,6 @@ from he_app.validation.period import is_valid_sum_value
 
 
 Outcome = tuple[Site, str | None, str, str | None, list[str], str | None]
-CACHE_UPDATE_SUCCESS_PERCENT = 85
 SCHEMA_VERSION = 2
 
 _REPORTED_NOTICES: set[str] = set()
@@ -49,10 +48,6 @@ def _notice(message: str) -> None:
 
 def cache_site_key(site: Site) -> str:
     return site.site_id or " ".join(site.name.split())
-
-
-def cache_update_allowed(success_count: int, total_count: int) -> bool:
-    return total_count > 0 and success_count * 100 > total_count * CACHE_UPDATE_SUCCESS_PERCENT
 
 
 def _outcome_failure_message(outcome: Outcome) -> str:
@@ -299,23 +294,46 @@ def validate_recent_cache_identity(
         if cached_site.site_id in used_ids:
             raise FingerprintCacheError(f"指纹缓存包含重复站点ID: {cached_site.site_id}")
         used_ids.add(cached_site.site_id)
-        _fingerprint_as_keys(
-            item["fingerprint"],
-            base=base,
-            periods=periods,
-            site=cached_site,
-        )
+        try:
+            _fingerprint_as_keys(
+                item["fingerprint"],
+                base=base,
+                periods=periods,
+                site=cached_site,
+            )
+        except FingerprintCacheError as exc:
+            # 单站历史指纹损坏只丢弃该站历史，不阻断整批写入。
+            _notice(f"缓存指纹损坏，本次忽略该站历史: {cached_site.site_id}: {exc}")
         cached_sites.append(cached_site)
 
     cached_by_id = {site.site_id: site for site in cached_sites}
     configured_by_id = {site.site_id: site for site in sites}
     if len(configured_by_id) != len(sites):
         raise FingerprintCacheError("当前配置包含重复站点ID")
-    if not allow_configured_subset and cached_by_id.keys() != configured_by_id.keys():
-        raise FingerprintCacheError("指纹缓存与当前配置的站点ID集合不一致")
-    for site_id, configured in configured_by_id.items():
-        if cached_by_id.get(site_id) != configured:
-            raise FingerprintCacheError(f"指纹缓存与当前配置的站点身份不一致: {site_id}")
+    # 逐站写入（用户 2026-10-20 指令）：缓存与配置的站点集合/身份差异不再中断整批写入。
+    # 缺失站点由 build_recent_cache_payload 补建条目（空指纹），身份变化的站点按当前
+    # 配置重写身份并保留可用历史；只有真正的结构损坏（重复ID、非法期数键）才失败。
+    # allow_configured_subset 保留为兼容参数，不再影响是否放行。
+    del allow_configured_subset
+    missing = sorted(configured_by_id.keys() - cached_by_id.keys())
+    if missing:
+        _notice(
+            f"缓存缺少 {len(missing)} 个配置站点，本次写入补建: {'/'.join(missing[:5])}"
+        )
+    stale = sorted(cached_by_id.keys() - configured_by_id.keys())
+    if stale:
+        _notice(
+            f"缓存含 {len(stale)} 个已不在配置中的站点，本次按配置重建: {'/'.join(stale[:5])}"
+        )
+    changed = sorted(
+        site_id
+        for site_id, configured in configured_by_id.items()
+        if site_id in cached_by_id and cached_by_id[site_id] != configured
+    )
+    if changed:
+        _notice(
+            f"{len(changed)} 个站点身份与缓存不一致，按当前配置重写: {'/'.join(changed[:5])}"
+        )
 
 
 def trim_fingerprint(
@@ -440,15 +458,21 @@ def build_recent_cache_payload(
         }
         outcome = outcomes.get(index, (site, None, "", "未执行", [], None))
         returned_site, result, detail, error, rank_values, previous_reason = outcome
+        # 逐站写入（用户 2026-10-20 指令）：单站结果异常只降级该站为失败，
+        # 绝不因此中断整批写入，也不影响其他成功站点落盘。
         if returned_site != site:
-            raise FingerprintCacheError(f"结果站点身份不一致: {site.site_id}")
+            _notice(f"结果站点身份不一致，按失败记录: {site.site_id}")
+            result, rank_values = None, []
+            error = "RuntimeError: 结果站点身份不一致"
         if result and (
             error
             or len(rank_values) != site.value_count
             or len(set(rank_values)) != len(rank_values)
             or not all(is_valid_sum_value(value) for value in rank_values)
         ):
-            raise FingerprintCacheError(f"本期指纹数据数量或格式错误: {site.site_id}")
+            _notice(f"本期指纹数据数量或格式错误，按失败记录: {site.site_id}")
+            result, rank_values = None, []
+            error = error or "本期指纹数据数量或格式错误"
         if current in allowed:
             if result and rank_values:
                 fingerprint[current] = ",".join(rank_values)
@@ -492,13 +516,19 @@ def build_recent_cache_payload(
             if replacement is not None:
                 ordered_sites.append(replacement)
                 continue
-            cached_site = _cached_site_identity(item, len(ordered_sites) + 1)
-            fingerprint = _existing_fingerprint(
-                item,
-                source_base=source_base,
-                periods=source_periods,
-                site=cached_site,
-            )
+            # 逐站写入：保留未配置站点的历史，但单个条目损坏只丢弃该条，
+            # 不影响本次成功站点写入（用户 2026-10-20 指令）。
+            try:
+                cached_site = _cached_site_identity(item, len(ordered_sites) + 1)
+                fingerprint = _existing_fingerprint(
+                    item,
+                    source_base=source_base,
+                    periods=source_periods,
+                    site=cached_site,
+                )
+            except FingerprintCacheError as exc:
+                _notice(f"未配置缓存条目损坏，本次丢弃: {item_id or '?'}: {exc}")
+                continue
             kept = dict(item)
             kept["fingerprint"] = _serialize_fingerprint(
                 {key: value for key, value in fingerprint.items() if key in allowed},
@@ -658,20 +688,6 @@ def _record_recent_cache_failures_locked(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
         "utf-8",
     )
-
-
-def record_recent_cache_failures(
-    path: Path,
-    sites: list[Site],
-    outcomes: dict[int, Outcome],
-    period: int,
-    *,
-    cycle_year: int | None = None,
-) -> None:
-    with exclusive_path_lock(path):
-        _record_recent_cache_failures_locked(
-            path, sites, outcomes, period, cycle_year
-        )
 
 
 def read_validated_fingerprints(

@@ -3,7 +3,11 @@ from collections import Counter
 
 from he_app.domain.models import Site
 from he_app.parsers.common import classify_failure, format_failure_result
-from he_app.validation.period import is_valid_sum_value
+from he_app.validation.period import (
+    INVALID_MATCHED_PERIOD,
+    is_valid_sum_value,
+    parse_matched_period,
+)
 from he_app.storage.failure_records import parse_failure_record, parse_failure_records, serialize_failure_record
 
 
@@ -19,6 +23,20 @@ SUCCESS_RANKING_HEADERS = {"当前合数排行", "内容\t次数\t排名"}
 def extract_current_values_from_success(result: str) -> list[str]:
     current_part = result.split(maxsplit=1)[0]
     return [value for value in re.findall(r"(?:0[1-9]|1[0-3])合", current_part) if is_valid_sum_value(value)]
+
+
+def borrowed_period(period: int, metadata: str | None) -> int | None:
+    """结果是否属于跨期借值；是则返回真实命中期号，否则返回 None。
+
+    与 crawler 共用 he_app.validation.period.parse_matched_period，保证
+    「缓存分流」和「成功 TXT 落盘」对第 6 个字段的理解完全一致。
+    标记存在但内容非法时返回 INVALID_MATCHED_PERIOD（0），由调用方按 fail-closed
+    处理，不得当成「无标记」放行。
+    """
+    matched = parse_matched_period(metadata)
+    if matched is None or matched == period:
+        return None
+    return matched
 
 
 def build_success_output_lines(success_lines: list[str], current_ranking_values: list[str]) -> list[str]:
@@ -100,15 +118,27 @@ def build_current_only_results(
     failure_categories: list[str] = []
     ranking_values: list[str] = []
     for index, site in enumerate(sites):
-        _site, result, detail, error, _rank_values, failure_category = outcomes.get(
+        _site, result, detail, error, _rank_values, metadata = outcomes.get(
             index, (site, None, "", "未执行", [], None)
         )
+        # 禁止跨期借值：命中非指定期的结果不得写进当期成功 TXT 与排行榜。
+        # 真实命中期号写进失败原因，保留完整证据链（不写死 period+1）。
+        borrowed = borrowed_period(period, metadata)
+        if borrowed is not None:
+            result = None
+            error = None
+            if borrowed == INVALID_MATCHED_PERIOD:
+                detail = f"当期{period}期命中标记非法，禁止跨期借值"
+                metadata = "无当期（命中标记非法）"
+            else:
+                detail = f"当期{period}期无严格候选；仅命中{borrowed}期，禁止跨期借值"
+                metadata = f"无当期（命中{borrowed}期）"
         if result:
             success_lines.append(result)
             ranking_values.extend(extract_current_values_from_success(result))
         else:
-            fail_lines.append(format_failure_result(period, site, detail, error, failure_category))
-            category = failure_category if failure_category and not error else classify_failure(period, detail, error).category
+            fail_lines.append(format_failure_result(period, site, detail, error, metadata))
+            category = metadata if metadata and not error else classify_failure(period, detail, error).category
             failure_categories.append(category)
     return success_lines, fail_lines, ranking_values, failure_categories
 

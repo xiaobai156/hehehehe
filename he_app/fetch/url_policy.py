@@ -19,6 +19,18 @@ from he_app.domain.errors import SiteScrapeFailure
 
 
 _DOH_OPENER = build_opener(ProxyHandler({}))
+
+# Endpoints answer the same JSON API (``{Status,Answer:[{type,data}]}``).  A
+# single provider is not enough: live 268-period runs lost eight sites to
+# intermittent TLS handshake timeouts on ``dns.google`` alone, which reported
+# as a site failure although the same host resolved fine seconds later.
+_DOH_ENDPOINTS = (
+    "https://cloudflare-dns.com/dns-query?name={name}&type=A",
+    "https://dns.alidns.com/resolve?name={name}&type=A",
+    "https://doh.pub/dns-query?name={name}&type=A",
+    "https://dns.google/resolve?name={name}&type=A",
+)
+_DOH_TIMEOUT = 5
 _SYNTHETIC_DNS_NETWORK = ipaddress.ip_network("198.18.0.0/15")
 
 
@@ -51,6 +63,22 @@ def _is_synthetic_dns_address(raw: str) -> bool:
         return False
 
 
+def _doh_payload(name: str, host: str) -> dict:
+    """Query the first reachable public DoH endpoint; fail only if all fail."""
+    failure: Exception | None = None
+    for template in _DOH_ENDPOINTS:
+        request = Request(
+            template.format(name=quote(name)),
+            headers={"Accept": "application/dns-json", "User-Agent": "he-crawler/1"},
+        )
+        try:
+            with _DOH_OPENER.open(request, timeout=_DOH_TIMEOUT) as response:
+                return json.loads(response.read(256 * 1024).decode("utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            failure = exc
+    raise SiteScrapeFailure("请求失败", f"公共DNS解析失败: {host}: {failure}") from failure
+
+
 def _resolve_public_via_doh(host: str) -> tuple[str, ...]:
     """Use public DNS only when the local resolver returns the proxy fake range."""
     pending = [host]
@@ -61,15 +89,7 @@ def _resolve_public_via_doh(host: str) -> tuple[str, ...]:
         if name in seen:
             continue
         seen.add(name)
-        request = Request(
-            f"https://dns.google/resolve?name={quote(name)}&type=A",
-            headers={"Accept": "application/dns-json", "User-Agent": "he-crawler/1"},
-        )
-        try:
-            with _DOH_OPENER.open(request, timeout=5) as response:
-                payload = json.loads(response.read(256 * 1024).decode("utf-8"))
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            raise SiteScrapeFailure("请求失败", f"公共DNS解析失败: {host}: {exc}") from exc
+        payload = _doh_payload(name, host)
         for answer in payload.get("Answer", ()):
             record_type = answer.get("type")
             value = str(answer.get("data", "")).rstrip(".")

@@ -165,6 +165,29 @@ def is_table_kill_sum_chunk(text: str) -> bool:
     return "期数" in normalized and "杀合" in normalized
 
 
+# 合数对照表（形如「01合：01 10」「02合：02 11 20」）常紧跟在当期杀合行之后，
+# 例如 展翅飞翔 s149_zhanchi 的 297 期行尾就粘着 01合..13合 全表。它不是候选行，
+# 却会让候选分段把上一期重复追加到末尾，使 bottom 边界取错期。这里按「连续出现
+# 至少 3 个不同合数编号的对照项」判定并截断，保留前面的真实候选行。
+_COUNT_TABLE_ITEM_RE = re.compile(r"(?<!\d)(\d{1,2})\s*合\s*[：:]\s*\d")
+
+
+def strip_count_reference_table(line: str) -> str:
+    """截掉候选行尾部的合数对照表，保留真实候选内容。"""
+    matches = list(_COUNT_TABLE_ITEM_RE.finditer(line))
+    if len(matches) < 3:
+        return line
+    distinct = {int(match.group(1)) for match in matches}
+    if len(distinct) < 3:
+        return line
+    # 只有对照表起点在候选值之后（即前面已出现过「开」）才截断，避免误伤正常候选。
+    first = matches[0].start()
+    head = line[:first]
+    if "开" not in head:
+        return line
+    return head.strip()
+
+
 def has_body_locator(text: str) -> bool:
     return bool(BODY_LOCATOR_RE.search(normalize_text(text)))
 
@@ -236,6 +259,13 @@ def is_contained_duplicate_candidate(
             earlier_normalized, allow_weak, value_count
         ) == values:
             return True
+        # 反向包含：后到的短行是先前长行的干净副本（先前那行尾部粘着标签残渣，
+        # 例如 展翅飞翔 的「296期 … 中 < li class='X2026297'>」）。同样算重复，
+        # 否则干净副本会被追加到候选末尾，把 bottom 边界推到上一期。
+        if normalized in earlier_normalized and extract_values(
+            normalized, allow_weak, value_count
+        ) == values:
+            return True
     return False
 
 
@@ -257,7 +287,7 @@ def build_candidate_parts(
                 candidates = split_period_segments(chunk, period) or [chunk]
 
             for candidate in candidates:
-                line = normalize_text(candidate)
+                line = strip_count_reference_table(normalize_text(candidate))
                 if not line or len(line) > 260:
                     continue
                 if not is_strict_current_candidate(line, period, allow_weak, value_count):
@@ -311,7 +341,7 @@ def build_latest_candidate_parts(
             candidates = split_all_period_segments(chunk) or [chunk]
 
             for candidate in candidates:
-                line = normalize_text(candidate)
+                line = strip_count_reference_table(normalize_text(candidate))
                 if not line or len(line) > 260:
                     continue
                 if not is_strict_period_candidate(line, allow_weak, value_count):

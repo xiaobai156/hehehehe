@@ -42,6 +42,12 @@ def load_sites(path: Path) -> list[Site]:
             type(top_period_exception) is not int or top_period_exception < 1
         ):
             raise SiteConfigError(f"站点配置第{index}条 top_period_exception 必须为正整数: {path}")
+        disabled = item.get("disabled", False)
+        if type(disabled) is not bool:
+            raise SiteConfigError(f"站点配置第{index}条 disabled 必须为布尔值: {path}")
+        if disabled:
+            # 封存站点：条目保留在配置中以便日后解封，但不参与抓取、不写入缓存与输出。
+            continue
 
         site_id = item["id"].strip()
         name = item["name"].strip()

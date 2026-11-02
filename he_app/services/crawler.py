@@ -15,10 +15,13 @@ from he_app.services.adaptive_fetch import (
 from he_app.services.browser_policy import runtime_click_first, runtime_requires_browser
 from he_app.services.document_sources import find_dynamic_home_topic_url, requires_browser
 from he_app.services.single_period import evaluate_site_period
+from he_app.validation.period import (
+    MATCHED_PERIOD_PREFIX,
+    matched_period_or_requested,
+)
 
 
 Outcome = tuple[int, Site, str | None, str, str | None, list[str], str | None]
-MATCHED_PERIOD_PREFIX = "__matched_period__:"
 _RENDER_SPECIAL_DETAIL_SITE_IDS = frozenset(
     {
         "s108_topic_1024380",  # 命中劫
@@ -35,15 +38,12 @@ def matched_period_from_reason(requested_period: int, reason: str | None) -> int
     exact-period results still keep it as ``None``. A successful next-period
     fallback records one private marker here so cache sync can write the value
     under its real issue number without changing the public success TXT format.
+
+    期号解析统一走 he_app.validation.period.matched_period_or_requested，
+    避免与 storage/reports 的判定语义分叉（否则会出现一边判借值、一边按当期写缓存）。
     """
 
-    if not reason or not reason.startswith(MATCHED_PERIOD_PREFIX):
-        return requested_period
-    raw = reason[len(MATCHED_PERIOD_PREFIX):].strip()
-    if not raw.isdigit():
-        return requested_period
-    matched = int(raw)
-    return matched if matched == requested_period + 1 else requested_period
+    return matched_period_or_requested(requested_period, reason)
 
 
 def build_mirror_urls(site: Site, all_sites: list[Site], limit: int) -> list[str]:
