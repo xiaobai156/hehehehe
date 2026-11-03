@@ -18,3 +18,24 @@ outputs/*.json
 audit/*_trace/
 .env
 .env.*
+
+# --- 生成物与本地临时文件（统一清理时补充） ---
+# Python / runtime artifacts
+.coverage.*
+.mypy_cache/
+# Local locks, temp files, logs and backups
+*.lock
+*.log
+*.bak
+*.before
+*.before_*
+*.orig
+*.rej
+nul
+# Browser profiles and build outputs
+browser-profile/
+dist_*/
+.paddleocr-cpu-venv/
+
+# --- 生成物与本地临时文件（统一清理时补充） ---
+audit/
