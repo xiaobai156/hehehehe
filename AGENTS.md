@@ -38,6 +38,7 @@
 
 ## GitHub 同步
 
-- 必要验证通过后，只提交本次代码/配置改动并推送 `origin`；远端必须是 `https://github.com/xiaobai156/hehehehe.git`。
+- 只有在用户当前明确说“提交”时，才执行 `git commit` 并推送 `origin`；其它任何时间不得 commit、不得 push、不得改动远程。远端必须是 `https://github.com/xiaobai156/hehehehe.git`。
+- 用户说“提交”时，`sites.json`（内容有变）和 `outputs/recent_10_cache.json` 必须一并提交，二者是数据基线，不得遗漏；`sites.json` 无改动则无需提交。
 - 提交前核对仓库根目录、分支、暂存范围和 `git diff`；保留用户已有未提交改动。
-- 不提交缓存、TXT结果、凭据、密钥、`.env*`、测试产物或临时文件；推送失败必须明确报告。
+- 不提交 TXT结果、凭据、密钥、`.env*`、测试产物或临时文件；推送失败必须明确报告。
