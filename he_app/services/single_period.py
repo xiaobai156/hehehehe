@@ -193,6 +193,20 @@ def _candidate_segments(document: str, period: int) -> list[tuple[str, int, int]
         for line in line_text.splitlines()
         if normalize_text(line)
     )
+    # Inline-only rich text (a flat run of <strong> spans whose only row
+    # boundary is <br>) has no block element and no text-node line per row, so
+    # the two passes above only yield fragments. <br> is the document's own row
+    # separator, so rebuild logical rows from it. Nothing downstream is
+    # relaxed: period, keyword, value-count and uniqueness still decide.
+    if soup.find("br") is not None:
+        row_soup = BeautifulSoup(document, "html.parser")
+        for br in row_soup.find_all("br"):
+            br.replace_with("\n")
+        chunks.extend(
+            normalize_digit_text(normalize_text(row))
+            for row in row_soup.get_text("").splitlines()
+            if normalize_text(row)
+        )
 
     segments: list[tuple[str, int, int]] = []
     seen: set[str] = set()
