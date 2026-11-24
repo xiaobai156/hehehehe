@@ -8,14 +8,17 @@ from urllib.parse import urlparse
 
 import requests
 
-from he_app.domain.errors import SiteScrapeFailure
+from he_app.domain.errors import DedicatedCandidateConflict, SiteScrapeFailure
 from he_app.domain.models import Site, SiteRule, SourceDocument
 from he_app.domain.policies import normalize_text
 from he_app.fetch.discovery import collect_documents
 from he_app.fetch.http import fetch_text, fetch_text_with_curl
 from he_app.fetch.url_policy import ResolvedOrigin, StrictNetworkPolicy
 from he_app.parsers.common import has_kill_sum_keyword
-from he_app.parsers.dedicated.kaijiangfacai import KAIJIANGFACAI_SITE_ID
+from he_app.parsers.dedicated.kaijiangfacai import (
+    KAIJIANGFACAI_SITE_ID,
+    extract_kaijiangfacai_kill_sum_period_values,
+)
 from he_app.parsers.dedicated.tables import site_rule
 from he_app.parsers.policies import SITE_RULES
 from he_app.services.document_sources import (
@@ -50,11 +53,30 @@ for _site_id in _RUNTIME_NO_LOCATOR_SITE_IDS:
 
 
 # The configured s131 IP endpoint was live-verified to redirect to this exact
-# canonical page. The canonical page itself passed the dedicated title/table,
+# canonical host. The canonical page itself passed the dedicated title/table,
 # target-period, direction and evidence checks. This is intentionally one
 # exact URL, not a domain suffix or global redirect exception.
+#
+# 327 live repair: the site rotates its 综合杀料 table between pages under the
+# same canonical host. At 327 the ``new/app/am.html`` page was the fresh one and
+# ``welcome.html`` was stale at 325期, so a formally correct 327期 run could not
+# see the current row. Both pages carry the identical dedicated table
+# (same .list-title, same six headers, same 杀合 column).
+#
+# 328 live repair: the two pages swap. ``new/app/am.html`` now stops at 327期
+# while ``welcome.html`` carries 325..328期 (327期 = 04合, equal to the already
+# published 327 fingerprint, so it is still the same source). A single hardcoded
+# page therefore goes stale every time the site rotates, so both verified pages
+# are listed and the one whose table reaches the requested issue is selected
+# before parsing. Selection never merges the two pages and never relaxes the
+# dedicated parser: exactly one page supplies the document, and the target
+# period must be present in it.
 KAIJIANGFACAI_CONFIG_URL = "https://156.225.88.144:12098/#234432"
 KAIJIANGFACAI_CANONICAL_URL = "https://84477.kjfc88b.app:2443/welcome.html"
+KAIJIANGFACAI_CANONICAL_URLS = (
+    KAIJIANGFACAI_CANONICAL_URL,
+    "https://84477.kjfc88b.app:2443/new/app/am.html",
+)
 
 
 def _verified_http_site(site: Site) -> Site:
@@ -150,30 +172,70 @@ def _peer_socket_unobservable(exc: SiteScrapeFailure) -> bool:
     )
 
 
+def _kaijiangfacai_select_page(
+    documents_by_url: list[tuple[str, list[str]]],
+    period: int | None,
+) -> list[str]:
+    """Pick the single verified page whose table reaches the target issue.
+
+    The two canonical pages rotate which one is fresh, so the target period — not
+    page order — decides. Only one page supplies the document; the pages are
+    never merged, and a page counts as usable only when the dedicated parser
+    itself finds the requested row in it. When no page has the row, the first
+    page is returned so the unchanged validation reports the real failure.
+    """
+
+    if period is None or len(documents_by_url) == 1:
+        return documents_by_url[0][1]
+    for _url, documents in documents_by_url:
+        try:
+            values = extract_kaijiangfacai_kill_sum_period_values(documents)
+        except DedicatedCandidateConflict:
+            continue
+        if period in values:
+            return documents
+    return documents_by_url[0][1]
+
+
 def collect_http_documents(
     session: requests.Session,
     site: Site,
     timeout: int,
+    period: int | None = None,
 ) -> list[str]:
     """Fetch one verified HTTP source without enabling unapproved derivatives."""
 
     request_site = _verified_http_site(site)
     rule = site_rule(site)
-    try:
-        return collect_documents(
-            session,
-            request_site.url,
-            timeout,
-            allow_inline_decode="http-decoded" in rule.allowed_fetch_kinds,
-        )
-    except requests.exceptions.SSLError:
-        # Transport compatibility only: curl still verifies TLS and is pinned
-        # to the already-validated public address. No -k or unverified host.
-        return _curl_tls_fallback(request_site, timeout)
-    except SiteScrapeFailure as exc:
-        if _peer_socket_unobservable(exc):
-            return _curl_tls_fallback(request_site, timeout)
-        raise
+    urls = (
+        KAIJIANGFACAI_CANONICAL_URLS
+        if site.site_id == KAIJIANGFACAI_SITE_ID
+        else (request_site.url,)
+    )
+    documents_by_url: list[tuple[str, list[str]]] = []
+    for url in urls:
+        try:
+            documents = collect_documents(
+                session,
+                url,
+                timeout,
+                allow_inline_decode="http-decoded" in rule.allowed_fetch_kinds,
+            )
+        except requests.exceptions.SSLError:
+            # Transport compatibility only: curl still verifies TLS and is
+            # pinned to the already-validated public address. No -k or
+            # unverified host.
+            documents = _curl_tls_fallback(replace(request_site, url=url), timeout)
+        except SiteScrapeFailure as exc:
+            if not _peer_socket_unobservable(exc):
+                if documents_by_url:
+                    break
+                raise
+            documents = _curl_tls_fallback(replace(request_site, url=url), timeout)
+        documents_by_url.append((url, documents))
+        if site.site_id != KAIJIANGFACAI_SITE_ID:
+            break
+    return _kaijiangfacai_select_page(documents_by_url, period)
 
 
 def collect_forum_documents_by_url_identity(
@@ -293,7 +355,7 @@ def try_http_current(
 ) -> tuple[list[str], tuple[str | None, str, list[str], str | None]] | None:
     """Use HTTP only when the exact configured period/direction validates."""
 
-    documents = collect_http_documents(session, site, timeout)
+    documents = collect_http_documents(session, site, timeout, period)
     evaluation = evaluate_site_period(site, period, documents)
     if evaluation[0] is None:
         return None

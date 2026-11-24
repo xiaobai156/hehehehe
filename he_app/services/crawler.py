@@ -207,7 +207,7 @@ def _scrape_exact_site(
         # pool, so this does not disable the live stale-shell fallback.
         if special_failure is not None:
             return None, special_failure.reason, [], special_failure.category
-        documents = collect_http_documents(session, site, timeout)
+        documents = collect_http_documents(session, site, timeout, period)
     return evaluate_site_period(site, period, documents)
 
 
